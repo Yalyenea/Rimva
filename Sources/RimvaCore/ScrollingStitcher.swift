@@ -49,9 +49,13 @@ public struct ScrollingStitcher {
         guard frame.width == width, frame.height == previous.height else {
             throw ScrollingStitchingError.mismatchedDimensions
         }
-        let next = try Raster(frame)
+        var next = try Raster(frame)
         if Self.equivalent(previous, next) { return .unchanged }
         guard height < Self.maximumHeight, height < Self.maximumPixels / width else { return .limitReached }
+        // Stable-frame polling needs no search summaries. Build them only for
+        // overlap detection, then retain the accepted frame's summary.
+        previous.prepareSamples()
+        next.prepareSamples()
         guard let match = Self.overlap(previous, next), match.offset > 0 else { return .noOverlap }
         guard match.offset <= Self.maximumHeight - height,
               match.offset <= Self.maximumPixels / width - height else { return .limitReached }
@@ -99,8 +103,8 @@ public struct ScrollingStitcher {
         return result
     }
 
-    /// Small cursor changes are tolerated only when surrounding content supplies
-    /// enough unchanged detail. A mostly blank pair cannot pass on area alone.
+    /// Visible changes must reach overlap detection: a small text change and a
+    /// cursor have no reliable distinction in captured pixels alone.
     public static func framesMatch(_ a: CGImage, _ b: CGImage) -> Bool {
         guard a.width == b.width, a.height == b.height,
               (try? validate(a)) != nil,
@@ -118,7 +122,7 @@ public struct ScrollingStitcher {
         let height: Int
         let bytes: Data
         let sampleWidth: Int
-        let samples: [UInt8]
+        var samples: [UInt8] = []
 
         init(_ image: CGImage) throws {
             width = image.width
@@ -140,28 +144,44 @@ public struct ScrollingStitcher {
             context.flush()
             bytes = Data(bytesNoCopy: memory, count: byteCount, deallocator: .free)
             sampleWidth = min(width, 64)
-            var sampled = [UInt8](repeating: 0, count: sampleWidth * height * 4)
-            let source = memory.assumingMemoryBound(to: UInt8.self)
-            for y in 0..<height {
-                for x in 0..<sampleWidth {
-                    let sourceX = (x * width + width / 2) / sampleWidth
-                    let sourceIndex = (y * width + sourceX) * 4
-                    let targetIndex = (y * sampleWidth + x) * 4
-                    for channel in 0..<4 { sampled[targetIndex + channel] = source[sourceIndex + channel] }
+        }
+
+        mutating func prepareSamples() {
+            guard samples.isEmpty else { return }
+            samples = bytes.withUnsafeBytes { raw in
+                var sampled = [UInt8](repeating: 0, count: sampleWidth * height * 12)
+                let source = raw.bindMemory(to: UInt8.self).baseAddress!
+                for y in 0..<height {
+                    for x in 0..<sampleWidth {
+                        let start = x * width / sampleWidth
+                        let end = (x + 1) * width / sampleWidth
+                        let target = (y * sampleWidth + x) * 12
+                        // Every source column contributes. Point sampling can miss
+                        // a narrow text column or a scrollbar completely.
+                        for channel in 0..<4 {
+                            var minimum: UInt8 = 255
+                            var maximum: UInt8 = 0
+                            var sum = 0
+                            for sourceX in start..<end {
+                                let value = source[(y * width + sourceX) * 4 + channel]
+                                minimum = min(minimum, value)
+                                maximum = max(maximum, value)
+                                sum += Int(value)
+                            }
+                            sampled[target + channel] = minimum
+                            sampled[target + 4 + channel] = maximum
+                            sampled[target + 8 + channel] = UInt8(sum / (end - start))
+                        }
+                    }
                 }
+                return sampled
             }
-            samples = sampled
         }
     }
 
     private struct Match {
         let offset: Int
         let footer: Int
-    }
-
-    private struct Candidate {
-        let offset: Int
-        let score: Double
     }
 
     private static let colorSpace = CGColorSpace(name: CGColorSpace.sRGB)!
@@ -191,50 +211,33 @@ public struct ScrollingStitcher {
     private static func equivalent(_ a: Raster, _ b: Raster) -> Bool {
         if a.bytes == b.bytes { return true }
         let pixelCount = a.width * a.height
-        let changeLimit = max(4, pixelCount / 500)
         return a.bytes.withUnsafeBytes { first in
             b.bytes.withUnsafeBytes { second in
                 let p = first.bindMemory(to: UInt8.self).baseAddress!
                 let q = second.bindMemory(to: UInt8.self).baseAddress!
-                var changes = 0
-                var stableDetail = 0
                 var bias = [Int64](repeating: 0, count: 4)
                 for index in stride(from: 0, to: first.count, by: 4) {
-                    let difference = delta(p, index, q, index)
-                    if difference > 3 {
-                        changes += 1
-                        if changes > changeLimit { return false }
-                    } else if index >= a.width * 4, delta(p, index, p, index - a.width * 4) > 12 {
-                        stableDetail += 1
-                    } else if index % (a.width * 4) > 0, delta(p, index, p, index - 4) > 12 {
-                        stableDetail += 1
-                    }
+                    guard delta(p, index, q, index) <= 3 else { return false }
                     for channel in 0..<4 { bias[channel] += Int64(p[index + channel]) - Int64(q[index + channel]) }
                 }
                 // A global color change is a different frame, even on a blank page.
-                guard bias.allSatisfy({ abs($0) * 2 <= Int64(pixelCount) }) else { return false }
-                return changes == 0 || stableDetail >= max(32, changes * 12)
+                return bias.allSatisfy { abs($0) * 2 <= Int64(pixelCount) }
             }
         }
     }
 
     private static func overlap(_ a: Raster, _ b: Raster) -> Match? {
         guard a.height >= 8 else { return nil }
-        return a.samples.withUnsafeBufferPointer { first in
-            b.samples.withUnsafeBufferPointer { second in
-                let p = first.baseAddress!
-                let q = second.baseAddress!
-                let columns = a.sampleWidth
+        return a.bytes.withUnsafeBytes { first in
+            b.bytes.withUnsafeBytes { second in
+                let p = first.bindMemory(to: UInt8.self).baseAddress!
+                let q = second.bindMemory(to: UInt8.self).baseAddress!
                 func stationary(_ y: Int) -> Bool {
-                    var error = 0
-                    var changed = 0
-                    for x in 0..<columns {
-                        let index = (y * columns + x) * 4
-                        let difference = delta(p, index, q, index)
-                        error += min(difference, 32)
-                        if difference > 8 { changed += 1 }
+                    for x in 0..<a.width {
+                        let index = (y * a.width + x) * 4
+                        if delta(p, index, q, index) > 3 { return false }
                     }
-                    return changed <= columns / 20 && error <= columns * 2
+                    return true
                 }
                 var header = 0
                 var footer = 0
@@ -245,98 +248,123 @@ public struct ScrollingStitcher {
                 let bodyHeight = a.height - header - footer
                 let minimumOverlap = max(4, bodyHeight / 5)
                 guard bodyHeight > minimumOverlap else { return nil }
-                var candidates: [Candidate] = []
-                for distance in 1...(bodyHeight - minimumOverlap) {
+                var firstDetailedRows = 0
+                var secondDetailedRows = 0
+                let requiredRows = min(8, minimumOverlap)
+                for y in header..<(a.height - footer) {
+                    let neighbor = y + 1 < a.height - footer ? a.width * 4 : -a.width * 4
+                    var firstDetail = false
+                    var secondDetail = false
+                    for x in 0..<a.width {
+                        let index = (y * a.width + x) * 4
+                        firstDetail = firstDetail || delta(p, index, p, index + neighbor) > 12
+                            || (x > 0 && delta(p, index, p, index - 4) > 12)
+                        secondDetail = secondDetail || delta(q, index, q, index + neighbor) > 12
+                            || (x > 0 && delta(q, index, q, index - 4) > 12)
+                        if firstDetail && secondDetail { break }
+                    }
+                    if firstDetail { firstDetailedRows += 1 }
+                    if secondDetail { secondDetailedRows += 1 }
+                    if firstDetailedRows >= requiredRows && secondDetailedRows >= requiredRows { break }
+                }
+                // Whitespace alone produces many zero-error shifts. Reject it
+                // before spending time validating every possible alignment.
+                guard firstDetailedRows >= requiredRows, secondDetailedRows >= requiredRows else { return nil }
+                // A fixed sidebar may fall outside the shared rows of a large
+                // scroll. Extending it would repeat its icons or text.
+                for direction in [1, -1] {
+                    for x in stride(from: direction > 0 ? 0 : a.width - 1,
+                                    through: direction > 0 ? a.width - 1 : 0, by: direction) {
+                        var stationaryColumn = true
+                        var verticalDetail = false
+                        for y in header..<(a.height - footer) {
+                            let index = (y * a.width + x) * 4
+                            if delta(p, index, q, index) > 3 {
+                                stationaryColumn = false
+                                break
+                            }
+                            if y > header, delta(p, index, p, index - a.width * 4) > 12 { verticalDetail = true }
+                        }
+                        if !stationaryColumn { break }
+                        if verticalDetail { return nil }
+                    }
+                }
+                var acceptedOffset: Int?
+                // Short reverse overlaps still expose repeating content. They
+                // are considered for ambiguity, even when too short to append.
+                for distance in 1...(bodyHeight - 4) {
                     let rows = bodyHeight - distance
                     for direction in [-1, 1] {
                         let startA = header + (direction > 0 ? distance : 0)
                         let startB = header + (direction < 0 ? distance : 0)
-                        if let score = coarseScore(p, q, columns: columns, startA: startA, startB: startB, rows: rows) {
-                            candidates.append(Candidate(offset: distance * direction, score: score))
+                        if coarseOverlapMatches(a, b, startA: startA, startB: startB, rows: rows),
+                           nativeOverlapMatches(a, b, startA: startA, startB: startB, rows: rows) {
+                            // Check upward alignments too: a periodic page must not turn
+                            // an upward scroll into an apparently valid downward one.
+                            guard acceptedOffset == nil else { return nil }
+                            acceptedOffset = distance * direction
                         }
                     }
                 }
-                // Repeating patterns produce many equally plausible alignments.
-                // Refusing them also bounds work on near-empty captures.
-                guard !candidates.isEmpty, candidates.count <= 64 else { return nil }
-                candidates.sort { $0.score < $1.score }
-                var accepted: Candidate?
-                for candidate in candidates {
-                    let distance = abs(candidate.offset)
-                    let startA = header + (candidate.offset > 0 ? distance : 0)
-                    let startB = header + (candidate.offset < 0 ? distance : 0)
-                    let rows = bodyHeight - distance
-                    if sampledOverlapMatches(p, q, columns: columns, startA: startA, startB: startB, rows: rows) {
-                        // Check upward alignments too: a periodic page must not turn
-                        // an upward scroll into an apparently valid downward one.
-                        guard accepted == nil else { return nil }
-                        accepted = candidate
+                guard let acceptedOffset, acceptedOffset > 0,
+                      bodyHeight - acceptedOffset >= minimumOverlap else { return nil }
+                // A moving scrollbar thumb can occupy only the unshared middle
+                // of both frames. Require edge detail to have a shared anchor.
+                let rows = bodyHeight - acceptedOffset
+                for direction in [1, -1] {
+                    for x in stride(from: direction > 0 ? 0 : a.width - 1,
+                                    through: direction > 0 ? a.width - 1 : 0, by: direction) {
+                        var detail = false
+                        for y in (header + 1)..<(a.height - footer) {
+                            let index = (y * a.width + x) * 4
+                            if delta(p, index, p, index - a.width * 4) > 12
+                                || delta(q, index, q, index - a.width * 4) > 12 {
+                                detail = true
+                                break
+                            }
+                        }
+                        if !detail { continue }
+                        var sharedDetail = false
+                        for y in 1..<rows {
+                            let ai = ((header + acceptedOffset + y) * a.width + x) * 4
+                            let bi = ((header + y) * a.width + x) * 4
+                            if delta(p, ai, p, ai - a.width * 4) > 12 || delta(q, bi, q, bi - a.width * 4) > 12 {
+                                sharedDetail = true
+                                break
+                            }
+                        }
+                        guard sharedDetail else { return nil }
+                        break
                     }
                 }
-                guard let accepted, accepted.offset > 0 else { return nil }
-                let rows = bodyHeight - accepted.offset
-                guard nativeOverlapMatches(a, b, startA: header + accepted.offset, startB: header, rows: rows) else { return nil }
-                return Match(offset: accepted.offset, footer: footer)
+                return Match(offset: acceptedOffset, footer: footer)
             }
         }
     }
 
-    private static func coarseScore(
-        _ a: UnsafePointer<UInt8>, _ b: UnsafePointer<UInt8>, columns: Int, startA: Int, startB: Int, rows: Int
-    ) -> Double? {
-        let rowCount = min(24, rows)
-        let columnCount = min(24, columns)
-        let count = rowCount * columnCount
-        var changed = 0
-        var error = 0
-        for row in 0..<rowCount {
-            let y = row * (rows - 1) / max(1, rowCount - 1)
-            for column in 0..<columnCount {
-                let x = column * (columns - 1) / max(1, columnCount - 1)
-                let difference = delta(a, ((startA + y) * columns + x) * 4, b, ((startB + y) * columns + x) * 4)
-                if difference > 8 {
-                    changed += 1
-                    if changed > max(1, count / 20) { return nil }
-                }
-                error += min(difference, 32)
-            }
-        }
-        guard error <= count * 3 else { return nil }
-        return Double(error) / Double(count)
-    }
-
-    private static func sampledOverlapMatches(
-        _ a: UnsafePointer<UInt8>, _ b: UnsafePointer<UInt8>, columns: Int, startA: Int, startB: Int, rows: Int
+    private static func coarseOverlapMatches(
+        _ a: Raster, _ b: Raster, startA: Int, startB: Int, rows: Int
     ) -> Bool {
-        var changes = 0
-        var error = 0
-        var features = 0
-        var changedFeatures = 0
-        var informativeRows = 0
-        let count = rows * columns
-        for y in 0..<rows {
-            var rowFeatures = 0
-            for x in 0..<columns {
-                let ai = ((startA + y) * columns + x) * 4
-                let bi = ((startB + y) * columns + x) * 4
-                let difference = delta(a, ai, b, bi)
-                error += min(difference, 32)
-                if difference > 8 { changes += 1 }
-                let neighbor = y + 1 < rows ? columns * 4 : -columns * 4
-                let verticalDetail = delta(a, ai, a, ai + neighbor) > 12 || delta(b, bi, b, bi + neighbor) > 12
-                let horizontalDetail = x > 0 && (delta(a, ai, a, ai - 4) > 12 || delta(b, bi, b, bi - 4) > 12)
-                if verticalDetail || horizontalDetail {
-                    features += 1
-                    rowFeatures += 1
-                    if difference > 8 { changedFeatures += 1 }
+        let rowCount = min(24, rows)
+        let rowBytes = a.sampleWidth * 12
+        return a.samples.withUnsafeBufferPointer { first in
+            b.samples.withUnsafeBufferPointer { second in
+                let p = first.baseAddress!
+                let q = second.baseAddress!
+                for row in 0..<rowCount {
+                    let y = row * (rows - 1) / max(1, rowCount - 1)
+                    let ai = (startA + y) * rowBytes
+                    let bi = (startB + y) * rowBytes
+                    for index in 0..<rowBytes {
+                        let difference = abs(Int(p[ai + index]) - Int(q[bi + index]))
+                        // Block extrema and averages cannot differ by more than
+                        // the allowed per-pixel noise in a valid alignment.
+                        if difference > 3 { return false }
+                    }
                 }
+                return true
             }
-            if rowFeatures > 0 { informativeRows += 1 }
-            if changes > max(1, count / 33) { return false }
         }
-        return error <= count * 3 && features >= max(4, min(32, count / 100))
-            && informativeRows >= max(2, min(8, rows / 8))
-            && changedFeatures <= features / 12
     }
 
     private static func nativeOverlapMatches(_ a: Raster, _ b: Raster, startA: Int, startB: Int, rows: Int) -> Bool {
@@ -345,24 +373,29 @@ public struct ScrollingStitcher {
                 let p = first.bindMemory(to: UInt8.self).baseAddress!
                 let q = second.bindMemory(to: UInt8.self).baseAddress!
                 let count = rows * a.width
-                var changes = 0
-                var badRows = 0
-                var error = 0
+                var features = 0
+                var informativeRows = 0
+                var bias = [Int64](repeating: 0, count: 4)
                 for y in 0..<rows {
-                    var rowChanges = 0
+                    var rowFeatures = 0
                     for x in 0..<a.width {
-                        let difference = delta(p, ((startA + y) * a.width + x) * 4, q, ((startB + y) * a.width + x) * 4)
-                        error += min(difference, 32)
-                        if difference > 8 {
-                            rowChanges += 1
-                            changes += 1
-                            if changes > max(2, count / 66) { return false }
+                        let ai = ((startA + y) * a.width + x) * 4
+                        let bi = ((startB + y) * a.width + x) * 4
+                        guard delta(p, ai, q, bi) <= 3 else { return false }
+                        for channel in 0..<4 { bias[channel] += Int64(p[ai + channel]) - Int64(q[bi + channel]) }
+                        let neighbor = y + 1 < rows ? a.width * 4 : -a.width * 4
+                        let verticalDetail = delta(p, ai, p, ai + neighbor) > 12 || delta(q, bi, q, bi + neighbor) > 12
+                        let horizontalDetail = x > 0 && (delta(p, ai, p, ai - 4) > 12 || delta(q, bi, q, bi - 4) > 12)
+                        if verticalDetail || horizontalDetail {
+                            features += 1
+                            rowFeatures += 1
                         }
                     }
-                    if rowChanges > a.width / 6 { badRows += 1 }
-                    if badRows > max(1, rows / 25) { return false }
+                    if rowFeatures > 0 { informativeRows += 1 }
                 }
-                return error <= count * 3
+                return features >= max(4, min(32, count / 100))
+                    && informativeRows >= min(8, rows)
+                    && bias.allSatisfy { abs($0) * 2 <= Int64(count) }
             }
         }
     }

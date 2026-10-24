@@ -6,3 +6,4 @@ xcuserdata/
 *.xcuserstate
 .env
 .env.*
+.codesign-identity

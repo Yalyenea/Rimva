@@ -181,5 +181,5 @@
 "正在生成…" = "Finishing…";
 "向下滚动，停稳后自动拼接" = "Scroll down; pause to stitch";
 "等待画面停稳" = "Waiting for scrolling to stop";
-"请稍向上回滚，保留重叠区域" = "Scroll back a little to overlap";
+"回滚少许，或避开固定侧栏重新框选" = "Scroll back, or reselect without sidebars";
 "已达到长度上限" = "Maximum length reached";

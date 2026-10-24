@@ -36,6 +36,11 @@ final class ScrollingStitcherTests: XCTestCase {
         XCTAssertEqual(pixel(output, x: 0, y: 0), [255, 0, 0, 255])
         XCTAssertEqual(pixel(output, x: 0, y: 155), [0, 0, 255, 255])
         XCTAssertEqual(pixel(output, x: 12, y: 80), documentPixel(12, 80))
+        try assertPixels(output, equalTo: fixture(width: 64, height: 156) { x, y in
+            if y == 0 { return [255, 0, 0, 255] }
+            if y == 155 { return [0, 0, 255, 255] }
+            return documentPixel(x, y)
+        })
     }
 
     func testDuplicateFrameDoesNotChangeImageOrCount() throws {
@@ -61,10 +66,12 @@ final class ScrollingStitcherTests: XCTestCase {
         func frame(_ offset: Int) throws -> CGImage {
             try fixture(width: 64, height: 96) { x, y in documentPixel(x, (y + offset) % 24) }
         }
-        var stitcher = try ScrollingStitcher(first: frame(0))
+        let first = try frame(0)
+        var stitcher = try ScrollingStitcher(first: first)
         XCTAssertEqual(try stitcher.append(frame(8)), .noOverlap)
         XCTAssertEqual(stitcher.height, 96)
         XCTAssertEqual(stitcher.frameCount, 1)
+        try assertPixels(stitcher.image(), equalTo: first)
     }
 
     func testBlankFramesCannotInventScrollOrHideSparseContentChanges() throws {
@@ -74,6 +81,7 @@ final class ScrollingStitcherTests: XCTestCase {
         XCTAssertEqual(try stitcher.append(blank), .unchanged)
         XCTAssertFalse(ScrollingStitcher.framesMatch(blank, darker))
         XCTAssertEqual(try stitcher.append(darker), .noOverlap)
+        try assertPixels(stitcher.image(), equalTo: blank)
 
         func sparse(_ row: Int) throws -> CGImage {
             try fixture(width: 64, height: 96) { x, y in
@@ -86,9 +94,10 @@ final class ScrollingStitcherTests: XCTestCase {
         var sparseStitcher = try ScrollingStitcher(first: first)
         XCTAssertEqual(try sparseStitcher.append(second), .noOverlap)
         XCTAssertEqual(sparseStitcher.frameCount, 1)
+        try assertPixels(sparseStitcher.image(), equalTo: first)
     }
 
-    func testSmallNoiseAndCursorChangesStillMatchDetailedContent() throws {
+    func testSmallNoiseMatchesButVisibleCursorChangesWaitForAStableFrame() throws {
         let first = try capture(offset: 0, width: 96)
         let noise = try fixture(width: 96, height: 96) { x, y in
             var value = documentPixel(x, y)
@@ -99,17 +108,40 @@ final class ScrollingStitcherTests: XCTestCase {
         let cursor = try fixture(width: 96, height: 96) { x, y in
             x >= 6 && x < 10 && y >= 20 && y < 24 ? [0, 0, 0, 255] : documentPixel(x, y)
         }
-        XCTAssertTrue(ScrollingStitcher.framesMatch(first, cursor))
+        XCTAssertFalse(ScrollingStitcher.framesMatch(first, cursor))
         let scrolled = try fixture(width: 96, height: 96) { x, y in
             var value = documentPixel(x, y + 23)
             if (x + y * 96) % 101 == 0 { value[0] = value[0] < 253 ? value[0] + 2 : value[0] - 2 }
-            if x >= 6 && x < 10 && y >= 20 && y < 24 { return [0, 0, 0, 255] }
             return value
         }
         var stitcher = try ScrollingStitcher(first: first)
+        XCTAssertEqual(try stitcher.append(cursor), .noOverlap)
+        try assertPixels(stitcher.image(), equalTo: first)
         XCTAssertEqual(try stitcher.append(scrolled), .appended(pixels: 23))
-        let output = try stitcher.image()
-        XCTAssertEqual(pixel(output, x: 50, y: 118), documentPixel(50, 118))
+        let expected = try fixture(width: 96, height: 119) { x, y in
+            var value = documentPixel(x, y)
+            if y >= 96, (x + (y - 23) * 96) % 101 == 0 {
+                value[0] = value[0] < 253 ? value[0] + 2 : value[0] - 2
+            }
+            return value
+        }
+        try assertPixels(stitcher.image(), equalTo: expected)
+    }
+
+    func testExistingCursorCannotHideNewTextElsewhere() throws {
+        func frame(_ newText: Bool) throws -> CGImage {
+            try fixture(width: 96, height: 96) { x, y in
+                if x >= 6 && x < 10 && y >= 20 && y < 24 { return [0, 0, 0, 255] }
+                if newText && x >= 60 && x < 64 && y >= 40 && y < 44 { return [0, 0, 0, 255] }
+                return documentPixel(x, y)
+            }
+        }
+        let first = try frame(false)
+        let next = try frame(true)
+        XCTAssertFalse(ScrollingStitcher.framesMatch(first, next))
+        var stitcher = try ScrollingStitcher(first: first)
+        XCTAssertEqual(try stitcher.append(next), .noOverlap)
+        try assertPixels(stitcher.image(), equalTo: first)
     }
 
     func testStationaryHeaderAndFooterAppearOnlyAtOuterEdges() throws {
@@ -155,13 +187,161 @@ final class ScrollingStitcherTests: XCTestCase {
             return ink ? [30, 30, 30, 255] : [255, 255, 255, 255]
         }
         let first = try fixture(width: 640, height: 240, pixel: pagePixel)
-        let next = try fixture(width: 640, height: 240) { x, y in pagePixel(x, y + 83) }
         var stitcher = try ScrollingStitcher(first: first)
-        XCTAssertEqual(try stitcher.append(next), .appended(pixels: 83))
+        for (offset, distance) in [(24, 24), (48, 24), (83, 35)] {
+            let next = try fixture(width: 640, height: 240) { x, y in pagePixel(x, y + offset) }
+            XCTAssertEqual(try stitcher.append(next), .appended(pixels: distance))
+        }
         let output = try stitcher.image()
         let expected = try fixture(width: 640, height: 323, pixel: pagePixel)
         XCTAssertEqual(output.height, 323)
         XCTAssertEqual(output.dataProvider!.data! as Data, expected.dataProvider!.data! as Data)
+    }
+
+    func testNarrowContentBetweenSamplingColumnsKeepsEveryRow() throws {
+        func page(_ x: Int, _ y: Int) -> [UInt8] {
+            x < 4 ? documentPixel(x, y) : [255, 255, 255, 255]
+        }
+        let first = try fixture(width: 640, height: 96, pixel: page)
+        let next = try fixture(width: 640, height: 96) { x, y in page(x, y + 23) }
+        var stitcher = try ScrollingStitcher(first: first)
+        XCTAssertEqual(try stitcher.append(next), .appended(pixels: 23))
+        try assertPixels(stitcher.image(), equalTo: fixture(width: 640, height: 119, pixel: page))
+    }
+
+    func testSparseTextMovingBesideStationaryDetailIsNotADuplicate() throws {
+        func frame(_ textRow: Int) throws -> CGImage {
+            try fixture(width: 640, height: 96) { x, y in
+                if x < 32 { return documentPixel(x, y) }
+                return x >= 100 && x < 104 && y >= textRow && y < textRow + 4
+                    ? [0, 0, 0, 255] : [255, 255, 255, 255]
+            }
+        }
+        let first = try frame(44)
+        let next = try frame(20)
+        XCTAssertFalse(ScrollingStitcher.framesMatch(first, next))
+        var stitcher = try ScrollingStitcher(first: first)
+        XCTAssertEqual(try stitcher.append(next), .noOverlap)
+        XCTAssertEqual(stitcher.frameCount, 1)
+        try assertPixels(stitcher.image(), equalTo: first)
+    }
+
+    func testLargeBlankBodyCannotHideTextMovingBelowFixedHeader() throws {
+        func frame(_ textRow: Int) throws -> CGImage {
+            try fixture(width: 640, height: 240) { x, y in
+                if y < 24 { return documentPixel(x, y) }
+                return x >= 100 && x < 104 && y >= textRow && y < textRow + 4
+                    ? [0, 0, 0, 255] : [255, 255, 255, 255]
+            }
+        }
+        let first = try frame(120)
+        let next = try frame(100)
+        XCTAssertFalse(ScrollingStitcher.framesMatch(first, next))
+        var stitcher = try ScrollingStitcher(first: first)
+        XCTAssertEqual(try stitcher.append(next), .noOverlap)
+        try assertPixels(stitcher.image(), equalTo: first)
+    }
+
+    func testNarrowFixedSidebarCannotBeSilentlyRepeated() throws {
+        func frame(_ offset: Int) throws -> CGImage {
+            try fixture(width: 640, height: 96) { x, y in
+                x < 4 ? documentPixel(x, y) : documentPixel(x, y + offset)
+            }
+        }
+        let first = try frame(0)
+        var stitcher = try ScrollingStitcher(first: first)
+        XCTAssertEqual(try stitcher.append(frame(24)), .noOverlap)
+        XCTAssertEqual(stitcher.frameCount, 1)
+        try assertPixels(stitcher.image(), equalTo: first)
+    }
+
+    func testFixedSidebarDetailOutsideOverlapCannotBeRepeated() throws {
+        func frame(_ offset: Int) throws -> CGImage {
+            try fixture(width: 320, height: 96) { x, y in
+                if x < 16 {
+                    return x >= 4 && x < 8 && y >= 40 && y < 44 ? [0, 0, 0, 255] : [255, 255, 255, 255]
+                }
+                return documentPixel(x, y + offset)
+            }
+        }
+        let first = try frame(0)
+        var stitcher = try ScrollingStitcher(first: first)
+        XCTAssertEqual(try stitcher.append(frame(60)), .noOverlap)
+        try assertPixels(stitcher.image(), equalTo: first)
+    }
+
+    func testMovingScrollbarOutsideOverlapCannotBeRepeated() throws {
+        func frame(_ offset: Int, thumb: Int) throws -> CGImage {
+            try fixture(width: 320, height: 96) { x, y in
+                if x >= 316 {
+                    return y >= thumb && y < thumb + 4 ? [90, 90, 90, 255] : [240, 240, 240, 255]
+                }
+                return documentPixel(x, y + offset)
+            }
+        }
+        let first = try frame(0, thumb: 40)
+        var stitcher = try ScrollingStitcher(first: first)
+        XCTAssertEqual(try stitcher.append(frame(60, thumb: 48)), .noOverlap)
+        try assertPixels(stitcher.image(), equalTo: first)
+    }
+
+    func testUpwardPeriodicScrollWithShortReverseOverlapCannotAppend() throws {
+        func frame(_ offset: Int) throws -> CGImage {
+            try fixture(width: 64, height: 96) { x, y in documentPixel(x, (y + offset) % 96) }
+        }
+        let first = try frame(80)
+        var stitcher = try ScrollingStitcher(first: first)
+        XCTAssertEqual(try stitcher.append(frame(0)), .noOverlap)
+        XCTAssertEqual(stitcher.frameCount, 1)
+        try assertPixels(stitcher.image(), equalTo: first)
+    }
+
+    func testFinalSmallScrollKeepsBlankSpacingAndFixedOuterEdges() throws {
+        let header = 12
+        let footer = 16
+        func page(_ x: Int, _ y: Int) -> [UInt8] {
+            y % 28 < 10 && x >= 32 && x < 288 ? documentPixel(x, y) : [255, 255, 255, 255]
+        }
+        func frame(_ offset: Int) throws -> CGImage {
+            try fixture(width: 320, height: 160) { x, y in
+                if y < header || y >= 160 - footer { return documentPixel(x, y) }
+                return page(x, y - header + offset)
+            }
+        }
+        var stitcher = try ScrollingStitcher(first: frame(0))
+        for (offset, distance) in [(60, 60), (62, 2), (63, 1)] {
+            XCTAssertEqual(try stitcher.append(frame(offset)), .appended(pixels: distance))
+        }
+        let expected = try fixture(width: 320, height: 223) { x, y in
+            if y < header { return documentPixel(x, y) }
+            if y >= 223 - footer { return documentPixel(x, y - 63) }
+            return page(x, y - header)
+        }
+        try assertPixels(stitcher.image(), equalTo: expected)
+    }
+
+    func testBlankRowsBesideFixedEdgesKeepTheirDocumentSpacing() throws {
+        let header = 8
+        let footer = 10
+        func page(_ x: Int, _ y: Int) -> [UInt8] {
+            y % 32 >= 24 && x >= 32 && x < 288 ? documentPixel(x, y) : [255, 255, 255, 255]
+        }
+        func frame(_ offset: Int) throws -> CGImage {
+            try fixture(width: 320, height: 160) { x, y in
+                if y < header || y >= 160 - footer { return documentPixel(x, y) }
+                return page(x, y - header + offset)
+            }
+        }
+        var stitcher = try ScrollingStitcher(first: frame(0))
+        for (offset, distance) in [(20, 20), (21, 1), (52, 31), (53, 1)] {
+            XCTAssertEqual(try stitcher.append(frame(offset)), .appended(pixels: distance))
+            let expected = try fixture(width: 320, height: 160 + offset) { x, y in
+                if y < header { return documentPixel(x, y) }
+                if y >= 160 + offset - footer { return documentPixel(x, y - offset) }
+                return page(x, y - header)
+            }
+            try assertPixels(stitcher.image(), equalTo: expected)
+        }
     }
 
     func testDimensionErrorsAndLengthLimitPreserveContent() throws {
@@ -180,6 +360,7 @@ final class ScrollingStitcherTests: XCTestCase {
         XCTAssertEqual(full.frameCount, 1)
         let output = try full.image()
         XCTAssertEqual(pixel(output, x: 1, y: 29_999), documentPixel(1, 29_999))
+        try assertPixels(output, equalTo: capture(offset: 0, width: 2, height: 30_000))
     }
 
     private func capture(offset: Int, width: Int = 64, height: Int = 96) throws -> CGImage {
@@ -201,6 +382,12 @@ final class ScrollingStitcherTests: XCTestCase {
                 XCTAssertEqual(pixel(image, x: x, y: y), documentPixel(x, offset + y), "Unexpected pixel at \(x), \(y)", file: file, line: line)
             }
         }
+    }
+
+    private func assertPixels(_ image: CGImage, equalTo expected: CGImage, file: StaticString = #filePath, line: UInt = #line) throws {
+        XCTAssertEqual(image.width, expected.width, file: file, line: line)
+        XCTAssertEqual(image.height, expected.height, file: file, line: line)
+        XCTAssertEqual(image.dataProvider!.data! as Data, expected.dataProvider!.data! as Data, file: file, line: line)
     }
 
     private func fixture(width: Int, height: Int, bgra: Bool = false, pixel: (Int, Int) -> [UInt8]) throws -> CGImage {

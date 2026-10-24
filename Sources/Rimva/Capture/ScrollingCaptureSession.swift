@@ -288,7 +288,7 @@ private struct ScrollCaptureToolbar: View {
         switch progress.phase {
         case .ready: return L("向下滚动，停稳后自动拼接")
         case .moving: return L("等待画面停稳")
-        case .overlap: return L("请稍向上回滚，保留重叠区域")
+        case .overlap: return L("回滚少许，或避开固定侧栏重新框选")
         case .limit: return L("已达到长度上限")
         }
     }
