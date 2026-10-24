@@ -44,15 +44,43 @@ struct EditorView: View {
         VStack(spacing: 0) {
             toolbar
             Rectangle().fill(Color(nsColor: preferences.palette.separator)).frame(height: 0.5)
-            ZStack(alignment: .top) {
-                Color.rimvaCanvas
-                if session.image != nil {
-                    CanvasView(session: session, onImport: controller.importImage, onPaste: controller.pasteImage)
-                    if session.tool != .select || session.selectedID != nil { contextTools.padding(.top, 12) }
-                } else { emptyState }
-                if let toast = session.toast {
-                    VStack { Spacer(); Text(toast).font(.system(size: 12)).padding(.horizontal, 14).padding(.vertical, 9).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8)).padding(.bottom, 18) }
-                        .allowsHitTesting(false)
+            HStack(spacing: 0) {
+                ZStack(alignment: .top) {
+                    Color.rimvaCanvas
+                    if session.image != nil {
+                        CanvasView(session: session, onImport: controller.importImage, onPaste: controller.pasteImage)
+                        if session.tool != .select || session.selectedID != nil { contextTools.padding(.top, 12) }
+                        VStack {
+                            Spacer()
+                            HStack(spacing: 5) {
+                                if session.clipboardIsStale {
+                                    Button(L("重新复制"), action: controller.copyImage)
+                                        .font(.system(size: 11)).lineLimit(1).fixedSize()
+                                        .buttonStyle(.plain).foregroundStyle(Color(nsColor: preferences.palette.accent))
+                                        .padding(.horizontal, 8).frame(height: 26)
+                                        .background(Color.rimvaSurface, in: RoundedRectangle(cornerRadius: 6))
+                                        .help(L("编辑已更改，重新复制"))
+                                }
+                                Spacer(minLength: 4)
+                                viewportControls.fixedSize(horizontal: true, vertical: true)
+                            }.padding(10)
+                        }
+                    } else { emptyState }
+                    if let toast = session.toast {
+                        VStack { Spacer(); Text(toast).font(.system(size: 12)).padding(.horizontal, 14).padding(.vertical, 9).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8)).padding(.bottom, 18) }
+                            .allowsHitTesting(false)
+                    }
+                }
+                if backgroundShown, session.image != nil {
+                    Rectangle().fill(Color(nsColor: preferences.palette.separator)).frame(width: 0.5)
+                    VStack(spacing: 0) {
+                        HStack {
+                            Text(L("背景外观")).font(.system(size: 12, weight: .medium))
+                            Spacer()
+                            IconButton(title: L("关闭"), symbol: "xmark") { backgroundShown = false }
+                        }.padding(.horizontal, 12).frame(height: 34)
+                        BackgroundPanel(session: session)
+                    }.frame(width: 344)
                 }
             }
         }
@@ -85,15 +113,36 @@ struct EditorView: View {
             divider
             IconButton(title: L("背景外观"), symbol: "rectangle.split.2x2", active: backgroundShown) { backgroundShown.toggle() }
                 .disabled(session.image == nil)
-                .popover(isPresented: $backgroundShown, arrowEdge: .bottom) { BackgroundPanel(session: session).frame(width: 440, height: 540) }
             WindowDragArea().frame(minWidth: 12, maxWidth: .infinity, maxHeight: .infinity)
             IconButton(title: L("截图入口"), symbol: "viewfinder", action: controller.showCaptureLauncher)
             IconButton(title: L("设置") + " ⌘ ,", symbol: "slider.horizontal.3", action: controller.showSettings)
             IconButton(title: L("保存") + " ⌘ S", symbol: "square.and.arrow.down", action: controller.saveImage).disabled(session.image == nil)
+                .contextMenu {
+                    Button(L("另存为…"), action: controller.saveImageAs)
+                    Button(L("在访达中显示"), action: controller.revealSavedImage).disabled(session.savedURL == nil)
+                }
             IconButton(title: L("复制成图") + " ⌘ ↵", symbol: "square.on.square", primary: true, action: controller.copyImage).disabled(session.image == nil)
         }.padding(.horizontal, 10).frame(height: EditorToolbarMetrics.height).background(Color.rimvaSurface)
     }
     private var divider: some View { Rectangle().fill(Color(nsColor: preferences.palette.separator)).frame(width: 1, height: 14).padding(.horizontal, 4) }
+    private var viewportControls: some View {
+        HStack(spacing: 1) {
+            Text("\(Int(session.outputSize.width)) × \(Int(session.outputSize.height)) px")
+                .monospacedDigit().lineLimit(1).padding(.horizontal, 7)
+                .help(L("输出尺寸；复制和保存使用当前成图"))
+            Text(session.style.enabled ? L("带背景") : L("无背景")).lineLimit(1).foregroundStyle(.secondary).padding(.trailing, 5)
+            IconButton(title: L("缩小"), symbol: "minus.magnifyingglass") { session.zoom = max(0.05, session.displayedZoom / 1.25) }
+            Text("\(Int((session.displayedZoom * 100).rounded()))%")
+                .monospacedDigit().frame(minWidth: 35)
+            IconButton(title: L("放大"), symbol: "plus.magnifyingglass") { session.zoom = min(8, max(0.05, session.displayedZoom * 1.25)) }
+            IconButton(title: L("实际尺寸"), symbol: "1.magnifyingglass") { session.zoom = 1 }
+            IconButton(title: L("适应窗口"), symbol: "arrow.down.right.and.arrow.up.left") { session.zoom = nil }
+        }
+        .font(.system(size: 11))
+        .padding(.horizontal, 4)
+        .background(Color.rimvaSurface, in: RoundedRectangle(cornerRadius: 6))
+        .help(L("滚轮平移；⌘ 滚轮或双指捏合缩放；⌥ 拖动平移"))
+    }
     private var contextTools: some View {
         Group {
             if session.tool == .crop {
@@ -153,11 +202,11 @@ struct BackgroundPanel: View {
                         Spacer()
                         ThemedSegments(selection: style.shadow, values: ShadowStyle.allCases) { value in
                             Text(value.title)
-                        }.frame(width: 160).accessibilityLabel(L("阴影"))
+                        }.frame(width: 196).accessibilityLabel(L("阴影"))
                     }
                     toggleRow("跟随外观", isOn: style.followsAppearance)
                     Rectangle().fill(Color(nsColor: preferences.palette.separator)).frame(height: 0.5)
-                    BackgroundBrowser(style: style, previewAppearance: $previewAppearance)
+                    BackgroundBrowser(style: style, previewAppearance: $previewAppearance, compact: true)
                 }.disabled(!session.style.enabled)
             }.padding(18)
         }
@@ -185,7 +234,7 @@ struct BackgroundPanel: View {
             }
             // One undo entry covers the entire slider drag.
             ThemedSlider(title: L(label), value: Binding(get: { value.wrappedValue }, set: { value.wrappedValue = $0.rounded() }), range: range) { editing in
-                if editing { session.checkpoint() }
+                if editing { session.beginInteraction() } else { session.endInteraction() }
             }.frame(height: 20)
         }
     }

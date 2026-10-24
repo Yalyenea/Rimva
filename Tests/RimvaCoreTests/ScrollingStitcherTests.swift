@@ -158,7 +158,9 @@ final class ScrollingStitcherTests: XCTestCase {
         }
         var stitcher = try ScrollingStitcher(first: frame(0))
         XCTAssertEqual(try stitcher.append(frame(25)), .appended(pixels: 25))
+        XCTAssertEqual(stitcher.lastAppendStart, 96 - footer - 25)
         XCTAssertEqual(try stitcher.append(frame(60)), .appended(pixels: 35))
+        XCTAssertEqual(stitcher.lastAppendStart, 96 - footer - 35)
         let output = try stitcher.image()
         XCTAssertEqual(output.height, 156)
         for y in 0..<output.height {

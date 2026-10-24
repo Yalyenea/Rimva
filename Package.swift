@@ -9,6 +9,7 @@ let package = Package(
     targets: [
         .target(name: "RimvaCore", resources: [.process("Resources")]),
         .executableTarget(name: "Rimva", dependencies: ["RimvaCore"]),
-        .testTarget(name: "RimvaCoreTests", dependencies: ["RimvaCore"])
+        .testTarget(name: "RimvaCoreTests", dependencies: ["RimvaCore"]),
+        .testTarget(name: "RimvaTests", dependencies: ["Rimva"])
     ]
 )

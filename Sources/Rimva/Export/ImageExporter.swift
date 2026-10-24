@@ -30,16 +30,14 @@ enum ImageExporter {
         guard NSPasteboard.general.setData(data, forType: .png) else { throw ExportError.clipboard }
     }
 
-    static func save(_ image: CGImage, to folder: URL) throws -> URL {
-        let data = try png(image)
-        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+    static func suggestedName() -> String {
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyy-MM-dd HH.mm.ss"
-        // The unique suffix prevents two rapid exports from replacing a file.
-        let name = "Rimva \(formatter.string(from: Date())) \(UUID().uuidString.prefix(4)).png"
-        let url = folder.appendingPathComponent(name)
-        try data.write(to: url, options: .atomic)
-        return url
+        return "Rimva \(formatter.string(from: Date())).png"
+    }
+
+    static func save(_ image: CGImage, to url: URL) throws {
+        try png(image).write(to: url, options: .atomic)
     }
 
     static func read(_ url: URL) throws -> CGImage {

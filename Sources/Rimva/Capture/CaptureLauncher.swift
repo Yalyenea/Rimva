@@ -15,7 +15,7 @@ final class CaptureLauncher: NSObject, NSWindowDelegate {
     func show(on screen: NSScreen?, choose: @escaping (CaptureMode) -> Void) {
         close()
         self.choose = choose
-        let size = NSSize(width: 308, height: 104)
+        let size = NSSize(width: 568, height: 104)
         let panel = LauncherPanel(contentRect: NSRect(origin: .zero, size: size),
                                   styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         panel.isReleasedWhenClosed = false
@@ -46,6 +46,8 @@ final class CaptureLauncher: NSObject, NSWindowDelegate {
             case 53: self.close(); return nil
             case 18, 83, 36, 76: self.select(.region); return nil
             case 19, 84: self.select(.scrolling); return nil
+            case 20, 85: self.select(.window); return nil
+            case 21, 86: self.select(.fullScreen); return nil
             default: return event
             }
         }
@@ -98,8 +100,10 @@ private struct CaptureLauncherView: View {
     var body: some View {
         let palette = preferences.palette
         HStack(spacing: 8) {
-            option(L("普通截图"), icon: "viewfinder", key: "1", mode: .region)
+            option(L("区域截图"), icon: "viewfinder", key: "1", mode: .region)
             option(L("长截屏"), icon: "arrow.down.to.line.compact", key: "2", mode: .scrolling)
+            option(L("窗口截图"), icon: "macwindow", key: "3", mode: .window)
+            option(L("全屏截图"), icon: "rectangle.dashed", key: "4", mode: .fullScreen)
         }
         .padding(12)
         .foregroundStyle(Color(nsColor: palette.text))

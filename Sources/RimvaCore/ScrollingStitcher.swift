@@ -29,6 +29,8 @@ public struct ScrollingStitcher {
     public let width: Int
     public private(set) var height: Int
     public private(set) var frameCount: Int = 1
+    /// First accepted row in the latest frame, excluding any stationary footer.
+    public private(set) var lastAppendStart: Int?
 
     private static let maximumWidth = 16_000
     private static let maximumHeight = 30_000
@@ -80,6 +82,7 @@ public struct ScrollingStitcher {
         previous = next
         height += match.offset
         frameCount += 1
+        lastAppendStart = start
         return .appended(pixels: match.offset)
     }
 

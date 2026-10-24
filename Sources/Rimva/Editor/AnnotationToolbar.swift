@@ -165,7 +165,7 @@ struct CompactColorWell: NSViewRepresentable {
             button.setButtonType(.momentaryPushIn)
             button.isBordered = false
             button.imagePosition = .imageOnly
-            button.image = NSImage(systemSymbolName: "eyedropper", accessibilityDescription: nil)
+            button.image = NSImage(systemSymbolName: "paintpalette", accessibilityDescription: nil)
             button.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 13, weight: .regular)
             button.focusRingType = .exterior
             button.target = self

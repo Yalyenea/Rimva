@@ -5,6 +5,7 @@ import SwiftUI
 struct BackgroundBrowser: View {
     @Binding var style: RimvaCore.BackgroundStyle
     @Binding var previewAppearance: RenderAppearance
+    var compact = false
     @ObservedObject private var preferences = Preferences.shared
     @ObservedObject private var library = BackgroundLibrary.shared
     @State private var source: BrowserSource = .presets
@@ -67,7 +68,7 @@ struct BackgroundBrowser: View {
 
     private var presets: some View {
         VStack(alignment: .leading, spacing: 15) {
-            LazyVGrid(columns: Array(repeating: GridItem(.flexible(minimum: 40), spacing: 10), count: 6), alignment: .leading, spacing: 14) {
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible(minimum: 40), spacing: 10), count: compact ? 3 : 6), alignment: .leading, spacing: 14) {
                 ForEach(BackgroundPreset.allCases) { preset in
                     let selected = style.source == .preset && style.customHex == nil && style.preset == preset
                     Button {

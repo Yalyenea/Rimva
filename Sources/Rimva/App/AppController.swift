@@ -17,10 +17,22 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var capturePending = false
     private var languageSubscription: AnyCancellable?
     private var themeSubscription: AnyCancellable?
+    private var documentSubscription: AnyCancellable?
+    private var captureWindows: [NSWindow] = []
+    private weak var captureKeyWindow: NSWindow?
+    private var previousApplication: NSRunningApplication?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
         NSApp.appearance = preferences.appearance.native
+        documentSubscription = session.objectWillChange.sink { [weak self] _ in
+            // Published values are delivered before assignment; inspect the completed change.
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.editorWindow?.isDocumentEdited = self.session.hasUnsavedChanges
+                self.session.refreshClipboardStatus()
+            }
+        }
         buildMenus()
         languageSubscription = NotificationCenter.default.publisher(for: .rimvaLanguageChanged).sink { [weak self] _ in
             self?.buildMenus()
@@ -30,6 +42,8 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
         themeSubscription = NotificationCenter.default.publisher(for: .rimvaThemeChanged).sink { [weak self] _ in
             guard let self else { return }
+            self.session.refreshClipboardStatus()
+            self.editorWindow?.isDocumentEdited = self.session.hasUnsavedChanges
             for window in [self.editorWindow, self.settingsWindow].compactMap({ $0 }) {
                 window.backgroundColor = self.preferences.palette.background
                 window.contentView?.needsDisplay = true
@@ -38,15 +52,20 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
         capture.onCapture = { [weak self] image in
             guard let self else { return }
             self.session.load(image); self.showEditor(); self.preferences.refreshSystemStatus()
+            self.clearCaptureContext()
             if self.preferences.automaticCopy {
-                do { try ImageExporter.copy(self.renderedImage(image)) }
+                do {
+                    try ImageExporter.copy(self.renderedImage(image))
+                    self.session.markCopied()
+                    self.session.notify(L("已自动复制当前成图；编辑后请重新复制。"))
+                }
                 catch { self.showError(error) }
             }
         }
-        capture.onCancel = { [weak self] in self?.showEditor() }
+        capture.onCancel = { [weak self] in self?.restoreCaptureContext() }
         capture.onError = { [weak self] error in
             guard let self else { return }
-            self.showEditor(); self.preferences.refreshSystemStatus(); self.showError(error, captureFailure: true)
+            self.restoreCaptureContext(); self.preferences.refreshSystemStatus(); self.showError(error, captureFailure: true)
         }
         hotKey.onTrigger = { [weak self] action in
             guard let self else { return }
@@ -129,6 +148,31 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
         if (notification.object as? NSWindow) === editorWindow { session.releaseImage() }
     }
 
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        sender !== editorWindow || confirmDiscard()
+    }
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        confirmDiscard() ? .terminateNow : .terminateCancel
+    }
+
+    private func confirmDiscard() -> Bool {
+        editorWindow?.makeFirstResponder(nil)
+        guard session.hasUnsavedChanges else { return true }
+        let alert = NSAlert()
+        alert.messageText = L("保存当前图片？")
+        alert.informativeText = L("当前图片尚未保存。继续会丢弃图片和编辑记录。")
+        alert.addButton(withTitle: L("保存"))
+        alert.addButton(withTitle: L("丢弃"))
+        alert.addButton(withTitle: L("取消"))
+        NSApp.activate(ignoringOtherApps: true)
+        switch alert.runModal() {
+        case .alertFirstButtonReturn: return persistImage(chooseLocation: false)
+        case .alertSecondButtonReturn: return true
+        default: return false
+        }
+    }
+
     func windowDidResize(_ notification: Notification) {
         if (notification.object as? NSWindow) === editorWindow { alignEditorWindowControls() }
     }
@@ -150,8 +194,13 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     func startCapture(_ mode: CaptureMode) {
-        guard !capturePending, !capture.isCapturing else { return }
+        guard !capturePending, !capture.isCapturing, NSApp.modalWindow == nil else { return }
         captureLauncher.close()
+        let previous = NSWorkspace.shared.frontmostApplication
+        guard confirmDiscard() else { return }
+        previousApplication = previous
+        captureWindows = [editorWindow, settingsWindow].compactMap { $0 }.filter(\.isVisible)
+        captureKeyWindow = NSApp.keyWindow
         capturePending = true
         editorWindow?.orderOut(nil); settingsWindow?.orderOut(nil)
         // Let WindowServer finish hiding our windows before freezing the desktop.
@@ -163,8 +212,23 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
     }
 
+    private func restoreCaptureContext() {
+        captureWindows.forEach { $0.orderFront(nil) }
+        if let previousApplication, previousApplication.processIdentifier != ProcessInfo.processInfo.processIdentifier {
+            previousApplication.activate(options: [])
+        } else if let captureKeyWindow {
+            NSApp.activate(ignoringOtherApps: true)
+            captureKeyWindow.makeKeyAndOrderFront(nil)
+        }
+        clearCaptureContext()
+    }
+
+    private func clearCaptureContext() {
+        captureWindows.removeAll(); captureKeyWindow = nil; previousApplication = nil
+    }
+
     func showCaptureLauncher() {
-        guard !capturePending, !capture.isCapturing else { return }
+        guard !capturePending, !capture.isCapturing, NSApp.modalWindow == nil else { return }
         if captureLauncher.isVisible { captureLauncher.close(); return }
         let screen = NSScreen.screens.first { $0.frame.contains(NSEvent.mouseLocation) } ?? NSScreen.main
         captureLauncher.show(on: screen) { [weak self] in self?.startCapture($0) }
@@ -180,7 +244,11 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     func importImage(_ url: URL) {
-        do { session.load(try ImageExporter.read(url)); showEditor() }
+        do {
+            let image = try ImageExporter.read(url)
+            guard confirmDiscard() else { return }
+            session.load(image); showEditor()
+        }
         catch { showError(error) }
     }
 
@@ -188,7 +256,10 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let board = NSPasteboard.general
         if let url = (board.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL])?.first { importImage(url); return }
         if let data = board.data(forType: .png) ?? board.data(forType: .tiff),
-           let image = NSBitmapImageRep(data: data)?.cgImage { session.load(image); showEditor(); return }
+           let image = NSBitmapImageRep(data: data)?.cgImage {
+            guard confirmDiscard() else { return }
+            session.load(image); showEditor(); return
+        }
         session.notify(L("剪贴板中没有图片。"))
     }
 
@@ -197,19 +268,40 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
         do {
             editorWindow?.makeFirstResponder(nil)
             try ImageExporter.copy(renderedImage(image))
-            editorWindow?.close()
+            session.markCopied()
+            session.notify(L("已复制成图，可继续编辑。"))
         } catch { showError(error) }
     }
 
-    func saveImage() {
-        guard let image = session.image else { return }
+    func saveImage() { _ = persistImage(chooseLocation: false) }
+    func saveImageAs() { _ = persistImage(chooseLocation: true) }
+    func revealSavedImage() {
+        guard let url = session.savedURL else { return }
+        NSWorkspace.shared.activateFileViewerSelecting([url])
+    }
+
+    private func persistImage(chooseLocation: Bool) -> Bool {
+        guard let image = session.image else { return false }
         do {
             editorWindow?.makeFirstResponder(nil)
+            let url: URL
+            if !chooseLocation, let saved = session.savedURL { url = saved }
+            else {
+                let panel = NSSavePanel()
+                panel.allowedContentTypes = [.png]
+                panel.canCreateDirectories = true
+                panel.directoryURL = session.savedURL?.deletingLastPathComponent() ?? preferences.saveFolder
+                panel.nameFieldStringValue = session.savedURL?.lastPathComponent ?? ImageExporter.suggestedName()
+                guard panel.runModal() == .OK, let chosen = panel.url else { return false }
+                url = chosen
+            }
             let rendered = try renderedImage(image)
-            let url = try ImageExporter.save(rendered, to: preferences.saveFolder)
+            try ImageExporter.save(rendered, to: url)
+            session.markSaved(to: url)
             preferences.lastSavedURL = url
-            session.notify(L("已保存到 %@", preferences.saveFolder.lastPathComponent))
-        } catch { showError(error) }
+            session.notify(L("已保存 %@", url.lastPathComponent))
+            return true
+        } catch { showError(error); return false }
     }
 
     private func renderedImage(_ image: CGImage) throws -> CGImage {
@@ -249,6 +341,10 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
         file.addItem(.separator())
         file.addItem(item("导入图片…", action: #selector(importAction), key: "o"))
         file.addItem(item("保存 PNG", action: #selector(saveAction), key: "s"))
+        let saveAs = item("另存为…", action: #selector(saveAsAction), key: "s")
+        saveAs.keyEquivalentModifierMask = [.command, .shift]
+        file.addItem(saveAs)
+        file.addItem(item("在访达中显示", action: #selector(revealAction)))
         file.addItem(item("复制成图", action: #selector(copyAction), key: "\r"))
         file.addItem(item("关闭窗口", action: #selector(closeAction), key: "w"))
         let fileRoot = NSMenuItem(title: L("文件"), action: nil, keyEquivalent: ""); fileRoot.submenu = file; main.addItem(fileRoot)
@@ -293,8 +389,10 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
     @objc private func settingsAction() { showSettings() }
     @objc private func importAction() { chooseImage() }
     @objc private func saveAction() { saveImage() }
+    @objc private func saveAsAction() { saveImageAs() }
+    @objc private func revealAction() { revealSavedImage() }
     @objc private func copyAction() { copyImage() }
-    @objc private func closeAction() { NSApp.keyWindow?.close() }
+    @objc private func closeAction() { NSApp.keyWindow?.performClose(nil) }
     @objc private func quitAction() { captureLauncher.close(); capture.cancel(); NSApp.terminate(nil) }
     @objc func paste(_ sender: Any?) { pasteImage() }
     @objc func undo(_ sender: Any?) { session.undo() }

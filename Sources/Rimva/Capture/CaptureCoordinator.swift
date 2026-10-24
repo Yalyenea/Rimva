@@ -122,8 +122,10 @@ final class CaptureCoordinator {
             view.onConfirm = { [weak self, weak view] in
                 guard let self, let view else { return }
                 if self.mode == .scrolling {
-                    guard let region = view.selectedRect else { NSSound.beep(); return }
-                    self.beginScrolling(screen: screen, region: region)
+                    guard view.canConfirm, let region = view.selectedRect else { NSSound.beep(); return }
+                    let center = CGPoint(x: screen.frame.minX + region.midX, y: primaryTop - screen.frame.minY - region.midY)
+                    let target = selectable.first { $0.frame.contains(center) }?.owningApplication
+                    self.beginScrolling(screen: screen, region: region, target: target.flatMap { NSRunningApplication(processIdentifier: $0.processID) })
                     return
                 }
                 guard let image = view.selectedImage() else { NSSound.beep(); return }
@@ -145,9 +147,14 @@ final class CaptureCoordinator {
         }
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self else { return event }
+            // Numeric selection fields keep their editing keys, including Return and Space.
+            if event.window?.firstResponder is NSTextView, event.keyCode != 53 { return event }
             switch event.keyCode {
             case 53: self.cancel(); return nil
-            case 36, 76: self.activeView?.onConfirm?(); return nil
+            case 36, 76:
+                if self.activeView?.canConfirm == true { self.activeView?.onConfirm?() }
+                else { NSSound.beep() }
+                return nil
             case 49:
                 guard self.mode != .scrolling else { return nil }
                 self.mode = self.mode == .window ? .region : .window
@@ -178,16 +185,24 @@ final class CaptureCoordinator {
         onCapture?(image)
     }
 
-    private func beginScrolling(screen: NSScreen, region: NSRect) {
+    private func beginScrolling(screen: NSScreen, region: NSRect, target: NSRunningApplication?) {
         guard region.width >= 40, region.height >= 80 else {
-            cleanUp()
-            onError?(CaptureFailure.smallScrollRegion)
+            NSSound.beep()
             return
         }
         closeSelection()
+        // Selection activates Rimva. Return focus to the chosen content before live sampling
+        // so it receives scrolling and keeps the same window in front.
+        target?.activate(options: [])
         let session = ScrollingCaptureSession(screen: screen, region: region, includesCursor: includesCursor)
         session.onComplete = { [weak self] in self?.finish($0) }
         session.onCancel = { [weak self] in self?.cancel() }
+        session.onReselect = { [weak self] in
+            guard let self else { return }
+            let cursor = self.includesCursor
+            self.cleanUp()
+            self.start(.scrolling, includesCursor: cursor)
+        }
         session.onError = { [weak self] error in
             guard let self else { return }
             self.cleanUp()
@@ -221,12 +236,11 @@ final class CaptureCoordinator {
 }
 
 private enum CaptureFailure: LocalizedError {
-    case permission, noDisplay, smallScrollRegion, capture(String)
+    case permission, noDisplay, capture(String)
     var errorDescription: String? {
         switch self {
         case .permission: return L("需要屏幕录制权限。请在系统设置中允许 Rimva 录制屏幕，再重新截图。")
         case .noDisplay: return L("无法找到可截图的显示器。请检查显示器连接后重试。")
-        case .smallScrollRegion: return L("请扩大长截屏选区。")
         case .capture(let reason): return L("截图失败：%@", reason)
         }
     }

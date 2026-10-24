@@ -1,27 +1,28 @@
 # Rimva
 
-原生 macOS 截图工具，使用 Swift、AppKit 与 Swift Package Manager。界面保持简洁、紧凑、扁平。
+Native macOS screenshot app using Swift, AppKit, and Swift Package Manager.
 
-## 开发入口
+## UI
 
-- 修改前阅读 [README.md](README.md)，通过 [Justfile](Justfile) 构建、测试和运行。
-- `just run` 构建并启动 `.tmp/Rimva.app`；`just build` 构建 Release 版本；`just test` 运行核心测试。
-- 长截屏和性能验证使用 Release 应用包。
-- `.tmp/Rimva.app` 用于开发，`/Applications/Rimva.app` 用于日常使用。安装使用 `just install`，启动安装版使用 `just launch`。
-- 运行前检查已有实例，先退出 Rimva。避免重复启动，也不要使用 `open -n`。
+- Keep it lightweight, compact, flat, and restrained. Use cool, muted theme colors consistently across windows and controls.
+- Hide the editor title bar and status bar. Use an icon-only toolbar with tooltips, tight spacing, and precise alignment.
+- Group related settings; avoid sparse pages and unnecessary sidebars. Keep windows resizable and preserve their size when switching content.
+- Give previews ample space and preserve image proportions. Prefer direct selection for a few options and sliders for continuous values.
+- Keep labels and buttons short. Remove redundant descriptions; keep control sizes stable during interaction.
+- Support English and Chinese; follow system language and appearance by default.
+- Preview major UI changes before implementation, using actual features and settings.
 
-## 签名与权限
+## Development
 
-- Bundle ID 固定为 `com.yfff.Rimva`。构建与安装始终使用同一代码签名证书。
-- 签名身份由 `RIMVA_CODESIGN_IDENTITY` 或本机 `.codesign-identity` 指定。缺少身份时直接失败；禁止临时签名、自动创建证书或降级。
-- `.codesign-identity` 属于本机配置，不提交个人证书信息。
-- 通过构建的应用包验证屏幕录制权限，避免 `swift run` 产生另一运行身份。
-- 安装前退出应用。签名身份变化必须显式设置 `RIMVA_ALLOW_IDENTITY_CHANGE=1`。
-- 权限由系统设置管理；不要清除或修改系统权限数据库，也不要自动修改钥匙串信任。
+- Read [README.md](README.md); use [Justfile](Justfile): `just run` for development, `just build` for Release, `just test` for core tests.
+- Develop with `.tmp/Rimva.app`; install to `/Applications/Rimva.app` with `just install`, then `just launch`. Quit existing instances before running or installing; never use `open -n` or `swift run`.
+- Keep code and file structure simple. Avoid silent fallbacks and unnecessary compatibility layers. Run checks proportional to risk.
+- Store temporary files and builds in `.tmp/`, discarded files in `.tmp/trash/`.
 
-## 工程约定
+## Verification and delivery
 
-- 新功能与修复使用新 Git 分支，未经用户要求不提交。
-- 临时文件与构建产物放在 `.tmp/`，待删除内容放在 `.tmp/trash/`。
-- 实现保持直接，避免静默兜底和不必要的兼容层。按风险运行最小且相关的检查。
-- 文档按任务明确要求的范围更新；提交前同步与该次变更有关的说明。保持现有文件结构精简。
+- Inspect UI changes in the built app: alignment, resizing, themes, both languages, and interaction states. Open it for user testing.
+- Use Release builds for scrolling capture and performance checks. Check alignment, duplicates, missing content, fixed elements, blank sections, small final scrolls, and upward scrolling.
+- Verify signing identity and screen recording access after updates through the app and an actual capture. Report what was tested.
+- Use a new branch for features and fixes. Commit, merge, and push only when requested; update relevant docs before committing.
+- Before publishing, check for secrets and personal data. Exclude local signing configuration, certificate details, personal paths, test screenshots, logs, and builds; use a GitHub privacy email.
