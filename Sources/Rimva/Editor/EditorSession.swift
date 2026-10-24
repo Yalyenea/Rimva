@@ -8,6 +8,17 @@ enum EditorTool: String, CaseIterable, Identifiable {
     var title: String { switch self { case .select: return L("选择"); case .arrow: return L("箭头"); case .rectangle: return L("矩形"); case .text: return L("文字"); case .number: return L("序号"); case .redact: return L("遮挡"); case .crop: return L("裁剪") } }
     var symbol: String { switch self { case .select: return "cursorarrow"; case .arrow: return "arrow.up.right"; case .rectangle: return "rectangle"; case .text: return "textformat"; case .number: return "1.circle"; case .redact: return "eye.slash.fill"; case .crop: return "crop" } }
     var annotation: AnnotationKind? { AnnotationKind(rawValue: rawValue) }
+    var shortcut: String {
+        switch self {
+        case .select: "v"
+        case .arrow: "a"
+        case .rectangle: "r"
+        case .text: "t"
+        case .number: "n"
+        case .redact: "m"
+        case .crop: "c"
+        }
+    }
 }
 
 @MainActor
@@ -17,6 +28,7 @@ final class EditorSession: ObservableObject {
     @Published var state = EditState() { didSet { updateHistory() } }
     @Published var style = BackgroundStyle() { didSet { updateHistory() } }
     @Published var tool: EditorTool = .select
+    @Published var backgroundShown = false
     @Published var selectedID: UUID?
     @Published var pendingCrop: CGRect?
     @Published var colorHex = "#F04444"

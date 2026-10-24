@@ -112,7 +112,8 @@ public enum ImageRenderer {
             try drawBackground(style, appearance: appearance, size: layout.size, in: context, colorSpace: colorSpace)
         }
 
-        let radius = style.enabled && style.rounded
+        // Rounding clips the image itself, including transparent exports without a background.
+        let radius = style.rounded
             ? min(CGFloat(style.radius), min(layout.content.width, layout.content.height) / 2)
             : 0
         let outline = CGPath(roundedRect: layout.content, cornerWidth: radius, cornerHeight: radius, transform: nil)
@@ -169,9 +170,11 @@ public enum ImageRenderer {
             guard !crop.isNull, !crop.isEmpty else { throw ImageRenderingError.invalidCrop }
         }
         var padding: CGFloat = 0
+        if style.enabled || style.rounded {
+            guard style.radius.isFinite, style.radius >= 0 else { throw ImageRenderingError.invalidStyle }
+        }
         if style.enabled {
-            guard style.padding.isFinite, style.radius.isFinite,
-                  style.padding >= 0, style.radius >= 0 else { throw ImageRenderingError.invalidStyle }
+            guard style.padding.isFinite, style.padding >= 0 else { throw ImageRenderingError.invalidStyle }
             padding = ceil(CGFloat(style.padding))
             if let shadow = shadow(for: style.shadow) {
                 // A conservative finite footprint keeps both shadow presets off canvas edges.

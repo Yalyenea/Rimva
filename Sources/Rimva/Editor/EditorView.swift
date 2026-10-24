@@ -8,6 +8,29 @@ enum EditorToolbarMetrics {
     static let buttonSide: CGFloat = 26
 }
 
+final class EditorWindow: NSWindow {
+    weak var session: EditorSession?
+
+    override func sendEvent(_ event: NSEvent) {
+        // The window receives letters even before a canvas click gives it focus.
+        // Text entry and modified menu commands keep their normal event handling.
+        guard event.type == .keyDown, let session, session.image != nil,
+              attachedSheet == nil, !(firstResponder is NSTextView),
+              event.modifierFlags.intersection([.command, .control, .option]).isEmpty,
+              let key = event.charactersIgnoringModifiers?.lowercased() else {
+            super.sendEvent(event)
+            return
+        }
+        if let tool = EditorTool.allCases.first(where: { $0.shortcut == key }) {
+            session.selectTool(tool)
+        } else if key == "b" {
+            session.backgroundShown.toggle()
+        } else {
+            super.sendEvent(event)
+        }
+    }
+}
+
 extension Color {
     init(rimvaHex hex: String) { self.init(nsColor: ImageRenderer.color(hex: hex) ?? .labelColor) }
     @MainActor static var rimvaCanvas: Color { Color(nsColor: Preferences.shared.palette.canvas) }
@@ -16,13 +39,19 @@ extension Color {
 
 struct IconButton: View {
     @ObservedObject private var preferences = Preferences.shared
+    @State private var hovered = false
     let title: String
     let symbol: String
+    var shortcut: String? = nil
     var active = false
     var primary = false
     var action: () -> Void
+    private var help: String { shortcut.map { L("%@（%@）", title, $0) } ?? title }
     var body: some View {
-        Button(action: action) {
+        Button {
+            hovered = false
+            action()
+        } label: {
             Image(systemName: symbol).font(.system(size: 13, weight: .regular))
                 // Keep typographic SF Symbols as the same pictogram in both languages.
                 .environment(\.locale, Locale(identifier: "en"))
@@ -31,7 +60,57 @@ struct IconButton: View {
                 .background(primary ? Color(nsColor: preferences.palette.accent) : active ? Color(nsColor: preferences.palette.selection) : .clear, in: RoundedRectangle(cornerRadius: 5))
                 .contentShape(Rectangle())
         }
-        .buttonStyle(.plain).help(title).accessibilityLabel(title)
+        .buttonStyle(.plain)
+        .onHover { hovered = $0 }
+        .anchorPreference(key: IconHelpKey.self, value: .bounds) { anchor in
+            hovered ? IconHelp(text: help, anchor: anchor) : nil
+        }
+        .accessibilityLabel(title)
+        .accessibilityHint(help)
+    }
+}
+
+private struct IconHelp {
+    let text: String
+    let anchor: Anchor<CGRect>
+}
+
+private enum IconHelpKey: PreferenceKey {
+    static var defaultValue: IconHelp? { nil }
+    static func reduce(value: inout IconHelp?, nextValue: () -> IconHelp?) {
+        value = nextValue() ?? value
+    }
+}
+
+private struct IconHelpBubble: View {
+    @ObservedObject private var preferences = Preferences.shared
+    let text: String
+    let target: CGRect
+    let containerSize: CGSize
+    @State private var visible = false
+
+    var body: some View {
+        let textSize = (text as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: 11)])
+        let width = min(ceil(textSize.width) + 16, max(0, containerSize.width - 16))
+        let height = ceil(textSize.height) + 10
+        let x = min(max(8, target.midX - width / 2), containerSize.width - width - 8)
+        let below = target.maxY + 6
+        let y = below + height <= containerSize.height - 8 ? below : target.minY - height - 6
+
+        Text(text)
+            .font(.system(size: 11)).lineLimit(1)
+            .foregroundStyle(Color(nsColor: preferences.palette.text))
+            .frame(width: width, height: height)
+            .background(Color(nsColor: preferences.palette.surface), in: RoundedRectangle(cornerRadius: 4))
+            .overlay(RoundedRectangle(cornerRadius: 4).stroke(Color(nsColor: preferences.palette.separator), lineWidth: 1))
+            .position(x: x + width / 2, y: y + height / 2)
+            .opacity(visible ? 1 : 0)
+            .task(id: text) {
+                visible = false
+                do { try await Task.sleep(for: .milliseconds(350)) }
+                catch { return }
+                visible = true
+            }
     }
 }
 
@@ -39,7 +118,6 @@ struct EditorView: View {
     @ObservedObject var session: EditorSession
     @ObservedObject private var preferences = Preferences.shared
     let controller: AppController
-    @State private var backgroundShown = false
     var body: some View {
         VStack(spacing: 0) {
             toolbar
@@ -71,13 +149,13 @@ struct EditorView: View {
                             .allowsHitTesting(false)
                     }
                 }
-                if backgroundShown, session.image != nil {
+                if session.backgroundShown, session.image != nil {
                     Rectangle().fill(Color(nsColor: preferences.palette.separator)).frame(width: 0.5)
                     VStack(spacing: 0) {
                         HStack {
                             Text(L("背景外观")).font(.system(size: 12, weight: .medium))
                             Spacer()
-                            IconButton(title: L("关闭"), symbol: "xmark") { backgroundShown = false }
+                            IconButton(title: L("关闭"), symbol: "xmark") { session.backgroundShown = false }
                         }.padding(.horizontal, 12).frame(height: 34)
                         BackgroundPanel(session: session)
                     }.frame(width: 344)
@@ -90,6 +168,18 @@ struct EditorView: View {
         .ignoresSafeArea()
         .environment(\.locale, L10n.locale)
         .id(preferences.language)
+        // Draw above the whole editor so the canvas cannot cover tooltips, and
+        // keep their placement within the window for tools near any edge.
+        .overlayPreferenceValue(IconHelpKey.self) { help in
+            GeometryReader { geometry in
+                if let help {
+                    IconHelpBubble(text: help.text, target: geometry[help.anchor], containerSize: geometry.size)
+                        .id(help.text)
+                }
+            }
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+        }
         .onDrop(of: [UTType.fileURL.identifier], isTargeted: nil) { providers in
             guard let provider = providers.first else { return false }
             provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { item, _ in
@@ -104,24 +194,24 @@ struct EditorView: View {
             Color.clear.frame(width: 66, height: EditorToolbarMetrics.height)
             HStack(spacing: 1) {
                 ForEach(EditorTool.allCases) { tool in
-                    IconButton(title: tool.title, symbol: tool.symbol, active: session.tool == tool) { session.selectTool(tool) }
+                    IconButton(title: tool.title, symbol: tool.symbol, shortcut: tool.shortcut.uppercased(), active: session.tool == tool) { session.selectTool(tool) }
                 }
             }.disabled(session.image == nil)
             divider
-            IconButton(title: L("撤销") + " ⌘ Z", symbol: "arrow.uturn.backward", action: session.undo).disabled(!session.canUndo)
-            IconButton(title: L("重做") + " ⇧ ⌘ Z", symbol: "arrow.uturn.forward", action: session.redo).disabled(!session.canRedo)
+            IconButton(title: L("撤销"), symbol: "arrow.uturn.backward", shortcut: "⌘Z", action: session.undo).disabled(!session.canUndo)
+            IconButton(title: L("重做"), symbol: "arrow.uturn.forward", shortcut: "⇧⌘Z", action: session.redo).disabled(!session.canRedo)
             divider
-            IconButton(title: L("背景外观"), symbol: "rectangle.split.2x2", active: backgroundShown) { backgroundShown.toggle() }
+            IconButton(title: L("背景外观"), symbol: "rectangle.split.2x2", shortcut: "B", active: session.backgroundShown) { session.backgroundShown.toggle() }
                 .disabled(session.image == nil)
             WindowDragArea().frame(minWidth: 12, maxWidth: .infinity, maxHeight: .infinity)
             IconButton(title: L("截图入口"), symbol: "viewfinder", action: controller.showCaptureLauncher)
-            IconButton(title: L("设置") + " ⌘ ,", symbol: "slider.horizontal.3", action: controller.showSettings)
-            IconButton(title: L("保存") + " ⌘ S", symbol: "square.and.arrow.down", action: controller.saveImage).disabled(session.image == nil)
+            IconButton(title: L("设置"), symbol: "slider.horizontal.3", shortcut: "⌘,", action: controller.showSettings)
+            IconButton(title: L("保存"), symbol: "square.and.arrow.down", shortcut: "⌘S", action: controller.saveImage).disabled(session.image == nil)
                 .contextMenu {
                     Button(L("另存为…"), action: controller.saveImageAs)
                     Button(L("在访达中显示"), action: controller.revealSavedImage).disabled(session.savedURL == nil)
                 }
-            IconButton(title: L("复制成图") + " ⌘ ↵", symbol: "square.on.square", primary: true, action: controller.copyImage).disabled(session.image == nil)
+            IconButton(title: L("复制成图"), symbol: "square.on.square", shortcut: "⌘↵", primary: true, action: controller.copyImage).disabled(session.image == nil)
         }.padding(.horizontal, 10).frame(height: EditorToolbarMetrics.height).background(Color.rimvaSurface)
     }
     private var divider: some View { Rectangle().fill(Color(nsColor: preferences.palette.separator)).frame(width: 1, height: 14).padding(.horizontal, 4) }
@@ -130,7 +220,6 @@ struct EditorView: View {
             Text("\(Int(session.outputSize.width)) × \(Int(session.outputSize.height)) px")
                 .monospacedDigit().lineLimit(1).padding(.horizontal, 7)
                 .help(L("输出尺寸；复制和保存使用当前成图"))
-            Text(session.style.enabled ? L("带背景") : L("无背景")).lineLimit(1).foregroundStyle(.secondary).padding(.trailing, 5)
             IconButton(title: L("缩小"), symbol: "minus.magnifyingglass") { session.zoom = max(0.05, session.displayedZoom / 1.25) }
             Text("\(Int((session.displayedZoom * 100).rounded()))%")
                 .monospacedDigit().frame(minWidth: 35)
@@ -189,14 +278,14 @@ struct BackgroundPanel: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 toggleRow("背景", isOn: style.enabled)
+                sliderRow("留白", value: $session.style.padding, range: 0...160).disabled(!session.style.enabled)
+                HStack {
+                    Text(L("圆角"))
+                    Spacer()
+                    Toggle(L("添加圆角"), isOn: style.rounded).labelsHidden().toggleStyle(ThemedToggleStyle(compact: true))
+                }
+                sliderRow("半径", value: $session.style.radius, range: 0...40).disabled(!session.style.rounded)
                 VStack(alignment: .leading, spacing: 16) {
-                    sliderRow("留白", value: $session.style.padding, range: 0...160)
-                    HStack {
-                        Text(L("圆角"))
-                        Spacer()
-                        Toggle(L("添加圆角"), isOn: style.rounded).labelsHidden().toggleStyle(ThemedToggleStyle(compact: true))
-                    }
-                    sliderRow("半径", value: $session.style.radius, range: 0...40).disabled(!session.style.rounded)
                     HStack {
                         Text(L("阴影"))
                         Spacer()

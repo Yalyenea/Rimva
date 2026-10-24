@@ -6,7 +6,7 @@ final class ImageRendererTests: XCTestCase {
     func testCropUsesOriginalTopLeftPixelCoordinates() throws {
         let source = try fixture(width: 8, height: 6) { _, y in y < 3 ? [255, 0, 0, 255] : [0, 0, 255, 255] }
         let state = EditState(crop: CGRect(x: 2, y: 1, width: 4, height: 4))
-        let output = try ImageRenderer.render(image: source, state: state, style: BackgroundStyle(enabled: false))
+        let output = try ImageRenderer.render(image: source, state: state, style: BackgroundStyle(enabled: false, rounded: false))
 
         XCTAssertEqual(output.width, 4)
         XCTAssertEqual(output.height, 4)
@@ -18,7 +18,7 @@ final class ImageRendererTests: XCTestCase {
         let source = try fixture(width: 8, height: 6) { _, y in y < 3 ? [255, 0, 0, 255] : [0, 0, 255, 255] }
         let mark = Annotation(kind: .redact, start: CGPoint(x: 3, y: 2), end: CGPoint(x: 5, y: 4), colorHex: "#00FF00")
         let state = EditState(crop: CGRect(x: 2, y: 1, width: 4, height: 4), annotations: [mark])
-        let output = try ImageRenderer.render(image: source, state: state, style: BackgroundStyle(enabled: false))
+        let output = try ImageRenderer.render(image: source, state: state, style: BackgroundStyle(enabled: false, rounded: false))
 
         XCTAssertEqual(pixel(output, x: 1, y: 1), [0, 255, 0, 255])
         XCTAssertEqual(pixel(output, x: 0, y: 1), [255, 0, 0, 255])
@@ -28,7 +28,7 @@ final class ImageRendererTests: XCTestCase {
     func testRedactionCoversWholePixelsWithOpaqueColor() throws {
         let source = try fixture(width: 8, height: 8) { _, _ in [255, 255, 255, 255] }
         let mark = Annotation(kind: .redact, start: CGPoint(x: 1.3, y: 2.8), end: CGPoint(x: 4.2, y: 5.1), colorHex: "#000000")
-        let output = try ImageRenderer.render(image: source, state: EditState(annotations: [mark]), style: BackgroundStyle(enabled: false))
+        let output = try ImageRenderer.render(image: source, state: EditState(annotations: [mark]), style: BackgroundStyle(enabled: false, rounded: false))
 
         for y in 2..<6 {
             for x in 1..<5 {
@@ -64,7 +64,42 @@ final class ImageRendererTests: XCTestCase {
         let plain = try ImageRenderer.render(image: source, state: EditState(), style: style)
         XCTAssertEqual(plain.width, 20)
         XCTAssertEqual(plain.height, 20)
-        XCTAssertEqual(pixel(plain, x: 0, y: 0), [255, 0, 0, 255])
+        XCTAssertEqual(pixel(plain, x: 0, y: 0), [0, 0, 0, 0])
+        XCTAssertEqual(pixel(plain, x: 10, y: 0), [255, 0, 0, 255])
+
+        style.rounded = false
+        let square = try ImageRenderer.render(image: source, state: EditState(), style: style)
+        XCTAssertEqual(pixel(square, x: 0, y: 0), [255, 0, 0, 255])
+    }
+
+    func testRoundedCropWithoutBackgroundClipsAnnotationsAtTransparentCorners() throws {
+        let source = try fixture(width: 80, height: 70) { _, _ in [255, 0, 0, 255] }
+        let mark = Annotation(kind: .redact, start: .zero, end: CGPoint(x: 80, y: 70), colorHex: "#00FF00")
+        let state = EditState(crop: CGRect(x: 10, y: 15, width: 40, height: 30), annotations: [mark])
+        let style = BackgroundStyle(enabled: false, padding: 160, radius: 40, shadow: .standard)
+        let output = try ImageRenderer.render(image: source, state: state, style: style)
+
+        XCTAssertEqual(ImageRenderer.contentRect(image: source, state: state, style: style), CGRect(x: 0, y: 0, width: 40, height: 30))
+        XCTAssertEqual(CGSize(width: output.width, height: output.height), CGSize(width: 40, height: 30))
+        for (x, y) in [(0, 0), (39, 0), (0, 29), (39, 29)] {
+            XCTAssertEqual(pixel(output, x: x, y: y), [0, 0, 0, 0])
+        }
+        XCTAssertEqual(pixel(output, x: 20, y: 15), [0, 255, 0, 255])
+        // A rounded redaction must not leave source color at partially transparent edges.
+        for y in 0..<15 {
+            for x in 0..<15 { XCTAssertEqual(pixel(output, x: x, y: y)[0], 0) }
+        }
+    }
+
+    func testRoundingWithoutBackgroundRejectsInvalidRadiusAndAllowsZero() throws {
+        let source = try fixture(width: 20, height: 20) { _, _ in [255, 0, 0, 255] }
+        for radius in [Double.nan, .infinity, -1] {
+            XCTAssertThrowsError(try ImageRenderer.render(image: source, state: EditState(), style: BackgroundStyle(enabled: false, radius: radius))) {
+                guard case ImageRenderingError.invalidStyle = $0 else { return XCTFail("Unexpected error: \($0)") }
+            }
+        }
+        let output = try ImageRenderer.render(image: source, state: EditState(), style: BackgroundStyle(enabled: false, radius: 0))
+        XCTAssertEqual(pixel(output, x: 0, y: 0), [255, 0, 0, 255])
     }
 
     func testShadowGetsSpaceAndFallsBelowImage() throws {
@@ -84,7 +119,7 @@ final class ImageRendererTests: XCTestCase {
     func testNativeChineseTextDrawsBothLines() throws {
         let source = try fixture(width: 180, height: 100) { _, _ in [255, 255, 255, 255] }
         let mark = Annotation(kind: .text, start: CGPoint(x: 10, y: 5), end: CGPoint(x: 170, y: 95), text: "中文第一行\n第二行", colorHex: "#000000", fontSize: 24)
-        let output = try ImageRenderer.render(image: source, state: EditState(annotations: [mark]), style: BackgroundStyle(enabled: false))
+        let output = try ImageRenderer.render(image: source, state: EditState(annotations: [mark]), style: BackgroundStyle(enabled: false, rounded: false))
 
         let firstLine = (5..<35).contains { y in (10..<170).contains { x in pixel(output, x: x, y: y)[0] < 100 } }
         let secondLine = (35..<70).contains { y in (10..<170).contains { x in pixel(output, x: x, y: y)[0] < 100 } }

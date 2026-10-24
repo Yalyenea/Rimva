@@ -219,3 +219,4 @@
 "已拼接，可继续向下滚动" = "Stitched. Continue scrolling down";
 "画面未变化" = "No change in the image";
 "无法注册 Esc 取消键，请关闭占用 Esc 的应用后重试。" = "Could not register Esc. Close the app using Esc and try again.";
+"%@（%@）" = "%@ (%@)";

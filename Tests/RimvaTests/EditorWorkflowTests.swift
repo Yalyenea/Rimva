@@ -13,7 +13,76 @@ final class EditorWorkflowTests: XCTestCase {
         let context = try XCTUnwrap(CGContext(data: nil, width: width, height: height, bitsPerComponent: 8,
                                             bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(),
                                             bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        context.setFillColor(NSColor.red.cgColor)
+        context.fill(CGRect(x: 0, y: 0, width: width, height: height))
         return try XCTUnwrap(context.makeImage())
+    }
+
+    @MainActor func testToolShortcutsWorkBeforeCanvasFocusAndKeepCommandKeys() async throws {
+        let session = EditorSession()
+        session.load(try image())
+        let window = EditorWindow(contentRect: CGRect(x: 0, y: 0, width: 1008, height: 650), styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.session = session
+        let container = NSView(frame: window.contentLayoutRect)
+        window.contentView = container
+        let canvas = EditorCanvas(session: session)
+        container.addSubview(canvas)
+        XCTAssertTrue(window.makeFirstResponder(nil))
+        func press(_ key: String, modifiers: NSEvent.ModifierFlags = []) throws {
+            let event = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: modifiers, timestamp: 0,
+                                                     windowNumber: window.windowNumber, context: nil, characters: key,
+                                                     charactersIgnoringModifiers: key, isARepeat: false, keyCode: 0))
+            window.sendEvent(event)
+        }
+        for (key, tool) in [("a", EditorTool.arrow), ("r", .rectangle), ("t", .text), ("n", .number), ("m", .redact), ("c", .crop), ("v", .select)] {
+            try press(key)
+            XCTAssertEqual(session.tool, tool)
+            if tool == .crop { XCTAssertNotNil(session.pendingCrop) }
+        }
+        XCTAssertNil(session.pendingCrop)
+        XCTAssertTrue(window.makeFirstResponder(canvas))
+        try press("b")
+        XCTAssertTrue(session.backgroundShown)
+        try press("b")
+        XCTAssertFalse(session.backgroundShown)
+        for modifiers: NSEvent.ModifierFlags in [.command, .option, .control] {
+            try press("t", modifiers: modifiers)
+            XCTAssertEqual(session.tool, .select)
+        }
+        try press("R", modifiers: .capsLock)
+        XCTAssertEqual(session.tool, .rectangle)
+    }
+
+    @MainActor func testToolShortcutsDoNotInterruptTextEditing() async throws {
+        let session = EditorSession()
+        session.load(try image())
+        session.selectTool(.text)
+        let window = EditorWindow(contentRect: CGRect(x: 0, y: 0, width: 1008, height: 650), styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.session = session
+        let container = NSView(frame: window.contentLayoutRect)
+        window.contentView = container
+        let text = NSTextView(frame: CGRect(x: 0, y: 0, width: 200, height: 50))
+        container.addSubview(text)
+        XCTAssertTrue(window.makeFirstResponder(text))
+        let event = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
+                                                 windowNumber: window.windowNumber, context: nil, characters: "b",
+                                                 charactersIgnoringModifiers: "b", isARepeat: false, keyCode: 11))
+        window.sendEvent(event)
+        XCTAssertEqual(session.tool, .text)
+        XCTAssertFalse(session.backgroundShown)
+        XCTAssertEqual(text.string, "b")
+    }
+
+    func testPNGExportPreservesTransparentRoundedCornersWithoutBackground() throws {
+        let output = try ImageRenderer.render(image: image(width: 40, height: 30), state: EditState(),
+                                              style: BackgroundStyle(enabled: false, radius: 10))
+        let png = try XCTUnwrap(NSBitmapImageRep(data: ImageExporter.png(output)))
+        XCTAssertEqual(png.pixelsWide, 40)
+        XCTAssertEqual(png.pixelsHigh, 30)
+        XCTAssertEqual(try XCTUnwrap(png.colorAt(x: 0, y: 0)).alphaComponent, 0)
+        XCTAssertEqual(try XCTUnwrap(png.colorAt(x: 20, y: 15)).alphaComponent, 1)
     }
 
     @MainActor func testSavedStateFollowsUndoAndRedo() async throws {

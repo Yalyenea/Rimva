@@ -90,7 +90,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     func showEditor() {
         if editorWindow == nil {
-            let window = makeWindow(size: CGSize(width: 1008, height: 650), title: "Rimva", resizable: true)
+            let window = makeWindow(size: CGSize(width: 1008, height: 650), title: "Rimva", resizable: true, editorSession: session)
             window.minSize = CGSize(width: 800, height: 520)
             let hosting = NSHostingView(rootView: EditorView(session: session, controller: self))
             // Localization changes text lengths, never the user's window size.
@@ -129,10 +129,18 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
         settingsWindow?.makeFirstResponder(nil)
     }
 
-    private func makeWindow(size: CGSize, title: String, resizable: Bool) -> NSWindow {
+    private func makeWindow(size: CGSize, title: String, resizable: Bool, editorSession: EditorSession? = nil) -> NSWindow {
         var mask: NSWindow.StyleMask = [.titled, .closable, .miniaturizable, .fullSizeContentView]
         if resizable { mask.insert(.resizable) }
-        let window = NSWindow(contentRect: CGRect(origin: .zero, size: size), styleMask: mask, backing: .buffered, defer: false)
+        let frame = CGRect(origin: .zero, size: size)
+        let window: NSWindow
+        if let editorSession {
+            let editor = EditorWindow(contentRect: frame, styleMask: mask, backing: .buffered, defer: false)
+            editor.session = editorSession
+            window = editor
+        } else {
+            window = NSWindow(contentRect: frame, styleMask: mask, backing: .buffered, defer: false)
+        }
         window.title = title
         window.titleVisibility = .hidden
         window.titlebarAppearsTransparent = true

@@ -171,12 +171,13 @@ struct SettingsView: View {
             HStack(spacing: 16) {
                 compactToggle(L("背景"), isOn: styleBinding(\.enabled))
                 compactToggle(L("跟随外观"), isOn: styleBinding(\.followsAppearance))
+                    .disabled(!preferences.defaultStyle.enabled)
             }
             HStack(alignment: .top, spacing: 16) {
                 VStack(spacing: 4) {
                     sliderLabel(L("留白间距"), value: Int(preferences.defaultStyle.padding))
                     ThemedSlider(title: L("留白间距"), value: styleSlider(\.padding), range: 0...160).frame(height: 20)
-                }
+                }.disabled(!preferences.defaultStyle.enabled)
                 VStack(spacing: 4) {
                     HStack(spacing: 5) {
                         Text(L("圆角半径")).lineLimit(1)
@@ -190,7 +191,7 @@ struct SettingsView: View {
                     ThemedSlider(title: L("圆角半径"), value: styleSlider(\.radius), range: 0...40)
                         .frame(height: 20).disabled(!preferences.defaultStyle.rounded)
                 }
-            }.disabled(!preferences.defaultStyle.enabled)
+            }
             HStack {
                 Text(L("投射阴影"))
                 Spacer(minLength: 12)
