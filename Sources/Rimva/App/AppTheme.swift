@@ -9,7 +9,10 @@ struct ThemePalette {
     let text: NSColor
     let secondary: NSColor
     let separator: NSColor
+    /// Fills and outlines of active controls.
     let accent: NSColor
+    /// Text and glyphs of active controls; a pale accent stays a fill only.
+    let accentText: NSColor
     let onAccent: NSColor
     let selection: NSColor
     let secondaryAccent: NSColor
@@ -18,35 +21,42 @@ struct ThemePalette {
 }
 
 enum AppTheme: String, CaseIterable, Identifiable {
-    case neutral, rosePine, catppuccin
+    case rosePine, standard
 
     var id: String { rawValue }
 
     var title: String {
         switch self {
-        case .neutral: L("默认")
         case .rosePine: "Rosé Pine"
-        case .catppuccin: "Catppuccin"
+        case .standard: L("标准")
         }
     }
 
     func palette(dark: Bool) -> ThemePalette {
-        // Keep each theme's original workspace colors. Interface ink and accents
-        // use restrained, cool variants, independent of annotation canvas colors.
         switch (self, dark) {
-        case (.neutral, false):
-            ThemePalette(hex: [0xF3F4F6, 0xF3F4F6, 0xFAFBFC, 0xE8EAED, 0x343941, 0x60666E, 0xD5D9DE, 0x596675, 0xF8FAFC, 0xE3E7EB, 0x596675, 0x966F37, 0xA55E67])
-        case (.neutral, true):
-            ThemePalette(hex: [0x20222B, 0x20222B, 0x272A35, 0x2E323A, 0xE1E4E8, 0xA1A8B1, 0x3D424B, 0xA2ADB9, 0x222730, 0x363D47, 0xA2ADB9, 0xC7AB7C, 0xCC929A])
+        // Rosé Pine Dawn: cream surfaces, warm gray selection, and gray-violet accents.
         case (.rosePine, false):
-            ThemePalette(hex: [0xFAF4ED, 0xFAF4ED, 0xFFFAF3, 0xEAE8E5, 0x3E3E48, 0x63636E, 0xDBD8D6, 0x626576, 0xF9F8FA, 0xE5E4E8, 0x626576, 0x987440, 0xA76270])
+            ThemePalette(hex: [0xFEFAF1, 0xFFF5EC, 0xF7F0EA, 0xF7F0EA, 0x575278, 0x797593, 0xCDC1CB, 0xEA9D34, 0xB4637A],
+                         accent: rgb(0x575278), accentText: rgb(0x575278), onAccent: rgb(0xFEFAF1),
+                         selection: rgb(0xEEE8E3), secondaryAccent: rgb(0x575278))
+        // Rosé Pine Moon: muted gray-violet fills with pale text on selected surfaces.
         case (.rosePine, true):
-            ThemePalette(hex: [0x191724, 0x191724, 0x1F1D2E, 0x292835, 0xE2E0E7, 0xA6A2B0, 0x3F3C4A, 0xA8A6B6, 0x22212C, 0x35323F, 0xA8A6B6, 0xC5AA80, 0xCC919F])
-        case (.catppuccin, false):
-            ThemePalette(hex: [0xEFF1F5, 0xEFF1F5, 0xE6E9EF, 0xE1E5EA, 0x3E4450, 0x5D6572, 0xCFD4DD, 0x5F6B7D, 0xF9FAFC, 0xDDE3EB, 0x5F6B7D, 0x94733E, 0xA15F70])
-        case (.catppuccin, true):
-            ThemePalette(hex: [0x1E1E2E, 0x1E1E2E, 0x181825, 0x2B2D3B, 0xDFE3EC, 0xA3ABBC, 0x3D4253, 0xA5AFC4, 0x232632, 0x343B4D, 0xA5AFC4, 0xC5B087, 0xCD94A3])
+            ThemePalette(hex: [0x232136, 0x2A273F, 0x2A273F, 0x393552, 0xE0DEF4, 0x908CAA, 0x56526E, 0xF6C177, 0xEB6F92],
+                         accent: rgb(0x908CAA), accentText: rgb(0xE0DEF4), onAccent: rgb(0x232136),
+                         selection: rgb(0x393552), secondaryAccent: rgb(0x908CAA))
+        // Neutral grays leave the macOS accent as the only hue.
+        case (.standard, false):
+            standard(hex: [0xF5F5F6, 0xF5F5F6, 0xFCFCFC, 0xE8E8EA, 0x1F1F21, 0x6E6E73, 0xD8D8DB, 0xB26A00, 0xC93C37])
+        case (.standard, true):
+            standard(hex: [0x1E1E20, 0x1E1E20, 0x262628, 0x2F2F32, 0xE8E8EA, 0x9A9A9F, 0x3A3A3D, 0xE0A84A, 0xE5706B])
         }
+    }
+
+    private func standard(hex values: [UInt32]) -> ThemePalette {
+        let accent = NSColor.controlAccentColor
+        // Read at draw time, so selection follows a system accent change.
+        return ThemePalette(hex: values, accent: accent, accentText: accent, onAccent: .white,
+                            selection: rgb(values[0]).blended(withFraction: 0.15, of: accent)!, secondaryAccent: accent)
     }
 
     var dynamicPalette: ThemePalette {
@@ -61,25 +71,27 @@ enum AppTheme: String, CaseIterable, Identifiable {
             background: color(\.background), surface: color(\.surface),
             canvas: color(\.canvas), elevated: color(\.elevated),
             text: color(\.text), secondary: color(\.secondary),
-            separator: color(\.separator), accent: color(\.accent), onAccent: color(\.onAccent),
+            separator: color(\.separator), accent: color(\.accent), accentText: color(\.accentText), onAccent: color(\.onAccent),
             selection: color(\.selection), secondaryAccent: color(\.secondaryAccent),
             warning: color(\.warning), error: color(\.error)
         )
     }
 }
 
+private func rgb(_ value: UInt32) -> NSColor {
+    NSColor(srgbRed: CGFloat((value >> 16) & 0xFF) / 255,
+            green: CGFloat((value >> 8) & 0xFF) / 255,
+            blue: CGFloat(value & 0xFF) / 255, alpha: 1)
+}
+
 private extension ThemePalette {
-    init(hex values: [UInt32]) {
-        func color(_ index: Int) -> NSColor {
-            let value = values[index]
-            return NSColor(srgbRed: CGFloat((value >> 16) & 0xFF) / 255,
-                           green: CGFloat((value >> 8) & 0xFF) / 255,
-                           blue: CGFloat(value & 0xFF) / 255, alpha: 1)
-        }
-        self.init(background: color(0), surface: color(1), canvas: color(2),
-                  elevated: color(3), text: color(4), secondary: color(5),
-                  separator: color(6), accent: color(7), onAccent: color(8),
-                  selection: color(9), secondaryAccent: color(10), warning: color(11), error: color(12))
+    /// `values`: background, surface, canvas, elevated, text, secondary, separator, warning, error.
+    init(hex values: [UInt32], accent: NSColor, accentText: NSColor, onAccent: NSColor, selection: NSColor, secondaryAccent: NSColor) {
+        let color = values.map(rgb)
+        self.init(background: color[0], surface: color[1], canvas: color[2],
+                  elevated: color[3], text: color[4], secondary: color[5],
+                  separator: color[6], accent: accent, accentText: accentText, onAccent: onAccent,
+                  selection: selection, secondaryAccent: secondaryAccent, warning: color[7], error: color[8])
     }
 }
 

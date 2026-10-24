@@ -102,14 +102,13 @@ public enum ImageRenderer {
     public static func draw(image: CGImage, state: EditState, style: BackgroundStyle, appearance: RenderAppearance = .light, in context: CGContext) throws {
         let layout = try layout(image: image, state: state, style: style)
         try validate(annotations: state.annotations)
-        let colorSpace = CGColorSpace(name: CGColorSpace.sRGB)!
         context.saveGState()
         defer { context.restoreGState() }
         context.clip(to: CGRect(origin: .zero, size: layout.size))
         context.interpolationQuality = .high
 
         if style.enabled {
-            try drawBackground(style, appearance: appearance, size: layout.size, in: context, colorSpace: colorSpace)
+            try drawBackground(style, appearance: appearance, size: layout.size, in: context)
         }
 
         // Rounding clips the image itself, including transparent exports without a background.
@@ -176,10 +175,8 @@ public enum ImageRenderer {
         if style.enabled {
             guard style.padding.isFinite, style.padding >= 0 else { throw ImageRenderingError.invalidStyle }
             padding = ceil(CGFloat(style.padding))
-            if let shadow = shadow(for: style.shadow) {
-                // A conservative finite footprint keeps both shadow presets off canvas edges.
-                padding = max(padding, ceil(shadow.blur * 2 + shadow.offset))
-            }
+            // Padding is the requested inset. Shadows clip to that canvas rather
+            // than imposing a hidden minimum on the slider and exported dimensions.
         }
         let size = CGSize(width: crop.width + padding * 2, height: crop.height + padding * 2)
         // Validate before integer conversion and allocation, including malicious imported values.
@@ -199,35 +196,31 @@ public enum ImageRenderer {
     }
 
     private static func drawBackground(
-        _ style: BackgroundStyle, appearance: RenderAppearance, size: CGSize, in context: CGContext, colorSpace: CGColorSpace
+        _ style: BackgroundStyle, appearance: RenderAppearance, size: CGSize, in context: CGContext
     ) throws {
-        if style.source == .image {
-            guard let path = style.imagePath(for: appearance) else { throw ImageRenderingError.missingBackgroundImage }
-            let image = try BackgroundImages.image(url: URL(fileURLWithPath: path), targetSize: size)
-            let scale = max(size.width / CGFloat(image.width), size.height / CGFloat(image.height))
-            let width = CGFloat(image.width) * scale
-            let height = CGFloat(image.height) * scale
-            context.saveGState()
-            defer { context.restoreGState() }
-            context.translateBy(x: (size.width - width) / 2, y: (size.height - height) / 2)
-            context.scaleBy(x: scale, y: scale)
-            drawSource(image, in: context)
+        if style.source == .preset, let hex = style.customHex {
+            guard let color = color(hex: hex) else { throw ImageRenderingError.invalidColor(hex) }
+            context.setFillColor(color.cgColor)
+            context.fill(CGRect(origin: .zero, size: size))
             return
         }
-        let hexColors = style.customHex.map { [$0] } ?? style.preset.colors
-        let colors = try hexColors.map { hex -> CGColor in
-            guard let color = color(hex: hex) else { throw ImageRenderingError.invalidColor(hex) }
-            return color.cgColor
-        }
-        if colors.count == 1 {
-            context.setFillColor(colors[0])
-            context.fill(CGRect(origin: .zero, size: size))
+        let url: URL
+        if style.source == .image {
+            guard let path = style.imagePath(for: appearance) else { throw ImageRenderingError.missingBackgroundImage }
+            url = URL(fileURLWithPath: path)
         } else {
-            guard let gradient = CGGradient(colorsSpace: colorSpace, colors: colors as CFArray, locations: nil) else {
-                throw ImageRenderingError.allocationFailed
-            }
-            context.drawLinearGradient(gradient, start: .zero, end: CGPoint(x: size.width, y: size.height), options: [])
+            url = style.preset.imageURL
         }
+        // Gallery, preview, and export use the same asset and centered aspect fill.
+        let image = try BackgroundImages.image(url: url, targetSize: size)
+        let scale = max(size.width / CGFloat(image.width), size.height / CGFloat(image.height))
+        let width = CGFloat(image.width) * scale
+        let height = CGFloat(image.height) * scale
+        context.saveGState()
+        defer { context.restoreGState() }
+        context.translateBy(x: (size.width - width) / 2, y: (size.height - height) / 2)
+        context.scaleBy(x: scale, y: scale)
+        drawSource(image, in: context)
     }
 
     private static func drawSource(_ image: CGImage, in context: CGContext) {

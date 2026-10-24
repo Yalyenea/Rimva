@@ -26,6 +26,10 @@ mkdir -p "$app_path/Contents/MacOS"
 mkdir -p "$app_path/Contents/Resources"
 cp "$binary_dir/Rimva" "$app_path/Contents/MacOS/Rimva"
 cp -R "$binary_dir/Rimva_RimvaCore.bundle" "$app_path/Contents/Resources/"
+xcrun actool Sources/AppIcon.icon --compile "$app_path/Contents/Resources" \
+    --app-icon AppIcon --include-all-app-icons --platform macosx --target-device mac \
+    --minimum-deployment-target 14.0 --output-partial-info-plist .tmp/swift-build/AppIcon-partial.plist \
+    --output-format human-readable-text --errors --warnings
 for language in en zh-Hans; do
     mkdir -p "$app_path/Contents/Resources/$language.lproj"
     cp "Sources/RimvaCore/Resources/$language.lproj/InfoPlist.strings" "$app_path/Contents/Resources/$language.lproj/"

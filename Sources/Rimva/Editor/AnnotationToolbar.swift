@@ -7,7 +7,8 @@ struct AnnotationToolbar: View {
     @ObservedObject private var preferences = Preferences.shared
 
     // Annotation colors belong to the document and stay independent of the UI theme.
-    private let colors = ["#F04444", "#F29D38", "#51A774", "#3578D8", "#9670CE", "#25272A"]
+    // Rosé Pine mid tones remain legible on both light and dark screenshots.
+    private let colors = ["#EB6F92", "#EA9D34", "#56949F", "#3E8FB0", "#907AA9", "#232136"]
 
     var body: some View {
         ViewThatFits(in: .horizontal) {
@@ -56,7 +57,7 @@ struct AnnotationToolbar: View {
                     session.fontSize = size
                     session.updateSelected { $0.fontSize = size }
                 }), values: [24.0, 32.0, 48.0]) { Text("\(Int($0))") }
-                    .frame(width: 104).accessibilityLabel(L("字号"))
+                    .frame(width: 116).accessibilityLabel(L("字号"))
             } else if session.tool == .arrow || session.tool == .rectangle || session.selected?.kind == .arrow || session.selected?.kind == .rectangle {
                 separator
                 HStack(spacing: 2) {
@@ -89,7 +90,7 @@ struct AnnotationToolbar: View {
             session.updateSelected { $0.lineWidth = width }
         } label: {
             Capsule()
-                .fill(Color(nsColor: session.lineWidth == width ? preferences.palette.accent : preferences.palette.text))
+                .fill(Color(nsColor: session.lineWidth == width ? preferences.palette.accentText : preferences.palette.text))
                 .frame(width: 15, height: width)
                 .frame(width: 26, height: 26)
                 .background(session.lineWidth == width ? Color(nsColor: preferences.palette.selection) : .clear, in: RoundedRectangle(cornerRadius: 4))

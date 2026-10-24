@@ -17,8 +17,21 @@ final class BackgroundImageTests: XCTestCase {
         try FileManager.default.removeItem(at: folder)
     }
 
+    func testPresetCatalogContainsTwelveDistinctBackgrounds() throws {
+        XCTAssertEqual(BackgroundPreset.allCases.count, 12)
+        XCTAssertEqual(Set(BackgroundPreset.allCases.map(\.id)).count, 12)
+        XCTAssertEqual(Set(BackgroundPreset.allCases.map(\.imageURL)).count, 12)
+        for preset in BackgroundPreset.allCases {
+            XCTAssertEqual(try JSONDecoder().decode(BackgroundPreset.self, from: JSONEncoder().encode(preset)), preset)
+            XCTAssertNotNil(BackgroundImages.thumbnail(url: preset.imageURL), preset.id)
+            let output = try render(style: BackgroundStyle(preset: preset, padding: 2, rounded: false, shadow: .off))
+            let reference = try render(style: imageStyle(light: preset.imageURL.path))
+            XCTAssertEqual(output.dataProvider?.data as Data?, reference.dataProvider?.data as Data?, preset.id)
+        }
+    }
+
     func testExistingSavedStyleKeepsPreset() throws {
-        let data = Data(#"{"enabled":true,"preset":"晨雾","padding":48,"rounded":true,"radius":16,"shadow":"light"}"#.utf8)
+        let data = Data(#"{"enabled":true,"preset":"鸢尾","padding":48,"rounded":true,"radius":16,"shadow":"light"}"#.utf8)
         let style = try JSONDecoder().decode(BackgroundStyle.self, from: data)
         XCTAssertEqual(style, BackgroundStyle())
         XCTAssertEqual(style.source, .preset)

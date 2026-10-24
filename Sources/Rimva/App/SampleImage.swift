@@ -6,37 +6,80 @@ enum SampleImage {
         let width = 1440, height = 900
         guard let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
         context.translateBy(x: 0, y: CGFloat(height)); context.scaleBy(x: 2, y: -2)
-        context.setFillColor(NSColor(srgbRed: 0.979, green: 0.977, blue: 0.964, alpha: 1).cgColor)
-        context.fill(CGRect(x: 0, y: 0, width: 720, height: 450))
-        NSGraphicsContext.saveGraphicsState()
-        NSGraphicsContext.current = NSGraphicsContext(cgContext: context, flipped: true)
-        defer { NSGraphicsContext.restoreGraphicsState() }
-        func label(_ text: String, x: CGFloat, y: CGFloat, size: CGFloat, color: NSColor = .darkGray, serif: Bool = false) {
-            let font = serif ? (NSFont(name: "Songti SC", size: size) ?? .systemFont(ofSize: size)) : .systemFont(ofSize: size)
-            (text as NSString).draw(at: CGPoint(x: x, y: y), withAttributes: [.font: font, .foregroundColor: color])
+        let space = CGColorSpace(name: CGColorSpace.sRGB)!
+        func color(_ hex: UInt32, alpha: CGFloat = 1) -> CGColor {
+            NSColor(srgbRed: CGFloat((hex >> 16) & 255) / 255,
+                    green: CGFloat((hex >> 8) & 255) / 255,
+                    blue: CGFloat(hex & 255) / 255, alpha: alpha).cgColor
         }
-        let muted = NSColor(srgbRed: 0.52, green: 0.55, blue: 0.51, alpha: 1)
-        context.setFillColor(muted.cgColor); context.fillEllipse(in: CGRect(x: 20, y: 14, width: 7, height: 7))
-        label("野外手记", x: 34, y: 10, size: 11, color: muted)
-        label("随手记录，慢慢生活", x: 574, y: 10, size: 11, color: muted)
-        context.setStrokeColor(muted.withAlphaComponent(0.14).cgColor); context.setLineWidth(0.5); context.move(to: CGPoint(x: 0, y: 34)); context.addLine(to: CGPoint(x: 720, y: 34)); context.strokePath()
-        label("F I E L D  N O T E S     /     0 7", x: 32, y: 66, size: 10, color: muted)
-        label("把日子\n过慢一点。", x: 32, y: 102, size: 31, color: NSColor(srgbRed: 0.20, green: 0.24, blue: 0.21, alpha: 1), serif: true)
-        label("周末，留给山野", x: 32, y: 214, size: 13)
-        label("沿着山路向前，听风穿过树林。\n带上相机，也留一点空白。", x: 32, y: 249, size: 12, color: muted)
-        context.setStrokeColor(muted.withAlphaComponent(0.3).cgColor); context.move(to: CGPoint(x: 32, y: 305)); context.addLine(to: CGPoint(x: 364, y: 305)); context.strokePath()
-        label("2026.10.22     ·     6 分钟阅读", x: 32, y: 321, size: 10, color: muted)
-        let art = CGRect(x: 392, y: 64, width: 296, height: 350)
-        context.saveGState(); context.addPath(CGPath(roundedRect: art, cornerWidth: 3, cornerHeight: 3, transform: nil)); context.clip()
-        context.setFillColor(NSColor(srgbRed: 0.84, green: 0.89, blue: 0.84, alpha: 1).cgColor); context.fill(art)
-        context.setFillColor(NSColor(srgbRed: 0.95, green: 0.93, blue: 0.82, alpha: 1).cgColor); context.fillEllipse(in: CGRect(x: 605, y: 104, width: 52, height: 52))
-        func mountain(_ points: [CGPoint], color: NSColor) { context.beginPath(); context.addLines(between: points); context.closePath(); context.setFillColor(color.cgColor); context.fillPath() }
-        mountain([CGPoint(x: 392,y: 298),CGPoint(x: 498,y: 142),CGPoint(x: 616,y: 318),CGPoint(x: 688,y: 246),CGPoint(x: 688,y: 414),CGPoint(x: 392,y: 414)], color: NSColor(srgbRed: 0.64, green: 0.73, blue: 0.64, alpha: 1))
-        mountain([CGPoint(x: 392,y: 344),CGPoint(x: 524,y: 234),CGPoint(x: 612,y: 344),CGPoint(x: 688,y: 288),CGPoint(x: 688,y: 414),CGPoint(x: 392,y: 414)], color: NSColor(srgbRed: 0.47, green: 0.58, blue: 0.49, alpha: 1))
-        mountain([CGPoint(x: 392,y: 398),CGPoint(x: 478,y: 310),CGPoint(x: 588,y: 414)], color: NSColor(srgbRed: 0.32, green: 0.44, blue: 0.36, alpha: 1))
-        context.setStrokeColor(NSColor(srgbRed: 0.88, green: 0.88, blue: 0.73, alpha: 1).cgColor); context.setLineWidth(4); context.addLines(between: [CGPoint(x: 555,y: 414),CGPoint(x: 574,y: 368),CGPoint(x: 544,y: 348),CGPoint(x: 573,y: 322)]); context.strokePath()
-        label("北纬 30° / 一段慢行", x: 408, y: 386, size: 10, color: NSColor(srgbRed: 0.91, green: 0.94, blue: 0.87, alpha: 1))
-        context.restoreGState()
+        func shade(_ path: CGPath, _ colors: [UInt32], from start: CGPoint, to end: CGPoint) {
+            context.saveGState()
+            context.addPath(path); context.clip()
+            let gradient = CGGradient(colorsSpace: space, colors: colors.map { color($0) } as CFArray, locations: nil)!
+            context.drawLinearGradient(gradient, start: start, end: end, options: [.drawsBeforeStartLocation, .drawsAfterEndLocation])
+            context.restoreGState()
+        }
+        func polygon(_ points: [CGPoint]) -> CGPath {
+            let path = CGMutablePath()
+            path.addLines(between: points); path.closeSubpath()
+            return path
+        }
+        func shadow(_ rect: CGRect, blur: CGFloat, opacity: CGFloat) {
+            context.saveGState()
+            context.translateBy(x: rect.midX, y: rect.midY)
+            context.scaleBy(x: rect.width / 2 + blur, y: rect.height / 2 + blur / 2)
+            let gradient = CGGradient(colorsSpace: space, colors: [color(0x575279, alpha: opacity), color(0x575279, alpha: 0)] as CFArray, locations: [0, 1])!
+            context.drawRadialGradient(gradient, startCenter: .zero, startRadius: 0, endCenter: .zero, endRadius: 1, options: [])
+            context.restoreGState()
+        }
+
+        shade(CGPath(rect: CGRect(x: 0, y: 0, width: 720, height: 450), transform: nil),
+              [0xF5F1EB, 0xEDE8E6, 0xE7E2E3], from: .zero, to: CGPoint(x: 720, y: 450))
+        let light = CGGradient(colorsSpace: space, colors: [color(0xFFFAF4, alpha: 0.65), color(0xFFFAF4, alpha: 0)] as CFArray, locations: [0, 1])!
+        context.drawRadialGradient(light, startCenter: CGPoint(x: 160, y: 80), startRadius: 0,
+                                  endCenter: CGPoint(x: 160, y: 80), endRadius: 440, options: [])
+        shade(CGPath(rect: CGRect(x: 0, y: 299, width: 720, height: 151), transform: nil),
+              [0xEAE5E0, 0xE1DBD7], from: CGPoint(x: 0, y: 299), to: CGPoint(x: 720, y: 450))
+
+        shadow(CGRect(x: 177, y: 359, width: 396, height: 15), blur: 23, opacity: 0.10)
+        shade(CGPath(rect: CGRect(x: 160, y: 346, width: 385, height: 25), transform: nil),
+              [0xDDD6CF, 0xCBC1BC], from: CGPoint(x: 160, y: 346), to: CGPoint(x: 545, y: 371))
+        shade(polygon([CGPoint(x: 545, y: 346), CGPoint(x: 570, y: 323), CGPoint(x: 570, y: 348), CGPoint(x: 545, y: 371)]),
+              [0xD2C9C3, 0xBDB1AC], from: CGPoint(x: 545, y: 323), to: CGPoint(x: 570, y: 371))
+        shade(polygon([CGPoint(x: 160, y: 346), CGPoint(x: 185, y: 323), CGPoint(x: 570, y: 323), CGPoint(x: 545, y: 346)]),
+              [0xF0EBE4, 0xDED6CF], from: CGPoint(x: 185, y: 323), to: CGPoint(x: 545, y: 346))
+        shadow(CGRect(x: 231, y: 327, width: 151, height: 10), blur: 12, opacity: 0.10)
+        shadow(CGRect(x: 394, y: 336, width: 146, height: 10), blur: 10, opacity: 0.10)
+
+        let vase = CGMutablePath()
+        vase.move(to: CGPoint(x: 269, y: 124))
+        vase.addLine(to: CGPoint(x: 319, y: 124))
+        vase.addLine(to: CGPoint(x: 319, y: 158))
+        vase.addCurve(to: CGPoint(x: 356, y: 216), control1: CGPoint(x: 319, y: 181), control2: CGPoint(x: 346, y: 187))
+        vase.addCurve(to: CGPoint(x: 369, y: 292), control1: CGPoint(x: 365, y: 239), control2: CGPoint(x: 374, y: 269))
+        vase.addCurve(to: CGPoint(x: 340, y: 332), control1: CGPoint(x: 366, y: 322), control2: CGPoint(x: 357, y: 332))
+        vase.addCurve(to: CGPoint(x: 249, y: 332), control1: CGPoint(x: 314, y: 336), control2: CGPoint(x: 272, y: 336))
+        vase.addCurve(to: CGPoint(x: 220, y: 292), control1: CGPoint(x: 231, y: 331), control2: CGPoint(x: 215, y: 317))
+        vase.addCurve(to: CGPoint(x: 235, y: 216), control1: CGPoint(x: 218, y: 263), control2: CGPoint(x: 226, y: 237))
+        vase.addCurve(to: CGPoint(x: 269, y: 158), control1: CGPoint(x: 242, y: 190), control2: CGPoint(x: 269, y: 183))
+        vase.closeSubpath()
+        shade(vase, [0xA1AFB2, 0xCED5D2, 0xAAB7B8, 0x7C8D95], from: CGPoint(x: 218, y: 208), to: CGPoint(x: 375, y: 231))
+        let opening = CGRect(x: 269, y: 120, width: 50, height: 9)
+        shade(CGPath(ellipseIn: opening, transform: nil), [0x71828A, 0x9DABAD],
+              from: CGPoint(x: 269, y: 120), to: CGPoint(x: 319, y: 129))
+        context.setStrokeColor(color(0xD9DFDC)); context.setLineWidth(1.2)
+        context.strokeEllipse(in: opening)
+
+        let bowl = CGMutablePath()
+        bowl.move(to: CGPoint(x: 387, y: 296))
+        bowl.addCurve(to: CGPoint(x: 462, y: 346), control1: CGPoint(x: 393, y: 333), control2: CGPoint(x: 414, y: 346))
+        bowl.addCurve(to: CGPoint(x: 540, y: 296), control1: CGPoint(x: 512, y: 346), control2: CGPoint(x: 534, y: 329))
+        bowl.closeSubpath()
+        shade(bowl, [0xEFE8DE, 0xE5DAD1, 0xBFAEAD], from: CGPoint(x: 389, y: 293), to: CGPoint(x: 537, y: 347))
+        shade(CGPath(ellipseIn: CGRect(x: 387, y: 281, width: 153, height: 31), transform: nil),
+              [0xF4EDE3, 0xD9CCC4], from: CGPoint(x: 398, y: 281), to: CGPoint(x: 530, y: 312))
+        shade(CGPath(ellipseIn: CGRect(x: 394, y: 286, width: 139, height: 21), transform: nil),
+              [0xB6A4A5, 0xD9CBC3, 0xE5DAD1], from: CGPoint(x: 424, y: 285), to: CGPoint(x: 476, y: 308))
         return context.makeImage()
     }
 }

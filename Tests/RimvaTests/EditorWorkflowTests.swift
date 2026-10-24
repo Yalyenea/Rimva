@@ -4,9 +4,16 @@ import RimvaCore
 @testable import Rimva
 
 final class EditorWorkflowTests: XCTestCase {
+    private var originalStyle: BackgroundStyle?
+
     @MainActor override func setUp() async throws {
         // Command-line XCTest has no application host, but Preferences uses AppKit's NSApp.
         _ = NSApplication.shared
+        originalStyle = Preferences.shared.defaultStyle
+    }
+
+    @MainActor override func tearDown() async throws {
+        if let originalStyle { Preferences.shared.defaultStyle = originalStyle }
     }
 
     private func image(width: Int = 640, height: Int = 480) throws -> CGImage {
@@ -99,6 +106,40 @@ final class EditorWorkflowTests: XCTestCase {
         XCTAssertFalse(session.hasUnsavedChanges)
         session.redo()
         XCTAssertTrue(session.hasUnsavedChanges)
+    }
+
+    @MainActor func testSettingsAndEditorShareStyleAndUndoAcrossBothDirections() async throws {
+        let preferences = Preferences.shared
+        let session = EditorSession()
+        session.load(try image())
+        let initial = session.style
+        session.beginInteraction()
+        for padding in [4.0, 8, 12] { session.style.padding = padding }
+        session.endInteraction()
+        XCTAssertEqual(preferences.defaultStyle, session.style)
+        session.undo()
+        XCTAssertEqual(session.style, initial)
+        XCTAssertEqual(preferences.defaultStyle, initial)
+        session.redo()
+        XCTAssertEqual(preferences.defaultStyle.padding, 12)
+
+        session.beginInteraction()
+        for padding in [16.0, 20, 24] { preferences.defaultStyle.padding = padding }
+        session.endInteraction()
+        session.undo()
+        XCTAssertEqual(session.style.padding, 12)
+        XCTAssertEqual(preferences.defaultStyle.padding, 12)
+
+        preferences.defaultStyle = BackgroundStyle(padding: 20, source: .image,
+                                                   lightImagePath: "day.png", darkImagePath: "night.png")
+        XCTAssertEqual(session.style, preferences.defaultStyle)
+        XCTAssertEqual(session.style.darkImagePath, "night.png")
+        session.undo()
+        XCTAssertEqual(session.style.padding, 12)
+        XCTAssertEqual(preferences.defaultStyle, session.style)
+        session.load(try image(width: 80, height: 60))
+        XCTAssertEqual(session.style, preferences.defaultStyle)
+        XCTAssertFalse(session.canUndo)
     }
 
     @MainActor func testClickAndDiscardedShapeDoNotConsumeUndo() async throws {
@@ -220,5 +261,17 @@ final class EditorWorkflowTests: XCTestCase {
         XCTAssertEqual(saved.width, 40)
         XCTAssertEqual(saved.height, 50)
         XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: folder.path), ["chosen.png"])
+    }
+
+    func testAutomaticSaveCreatesFolderAndPreservesEachCapture() throws {
+        let folder = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().appendingPathComponent(".tmp/export-tests-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let first = try ImageExporter.saveAutomatically(image(width: 20, height: 30), in: folder)
+        let second = try ImageExporter.saveAutomatically(image(width: 40, height: 50), in: folder)
+        XCTAssertNotEqual(first, second)
+        XCTAssertEqual(try ImageExporter.read(first).width, 20)
+        XCTAssertEqual(try ImageExporter.read(second).width, 40)
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: folder.path).count, 2)
     }
 }

@@ -102,18 +102,33 @@ final class ImageRendererTests: XCTestCase {
         XCTAssertEqual(pixel(output, x: 0, y: 0), [255, 0, 0, 255])
     }
 
-    func testShadowGetsSpaceAndFallsBelowImage() throws {
+    func testShadowFallsBelowImageWithinRequestedPadding() throws {
         let source = try fixture(width: 40, height: 40) { _, _ in [255, 255, 255, 255] }
-        let style = BackgroundStyle(customHex: "#FFFFFF", padding: 0, rounded: false, shadow: .standard)
+        let style = BackgroundStyle(customHex: "#FFFFFF", padding: 100, rounded: false, shadow: .standard)
         let rect = ImageRenderer.contentRect(image: source, state: EditState(), style: style)
         let output = try ImageRenderer.render(image: source, state: EditState(), style: style)
 
         XCTAssertEqual(output.width, Int(ImageRenderer.outputSize(image: source, state: EditState(), style: style).width))
-        XCTAssertGreaterThan(rect.minX, 40)
+        XCTAssertEqual(rect.minX, 100)
         XCTAssertEqual(pixel(output, x: 0, y: output.height / 2), [255, 255, 255, 255])
         let above = pixel(output, x: Int(rect.midX), y: Int(rect.minY) - 8)[0]
         let below = pixel(output, x: Int(rect.midX), y: Int(rect.maxY) + 8)[0]
         XCTAssertLessThan(below, above)
+    }
+
+    func testEveryPaddingValueAppliesWithEitherShadowPreset() throws {
+        let source = try fixture(width: 40, height: 30) { _, _ in [255, 0, 0, 255] }
+        for shadow in ShadowStyle.allCases {
+            for padding in [0, 1, 8, 24, 48, 55, 56, 57] {
+                let style = BackgroundStyle(padding: Double(padding), rounded: false, shadow: shadow)
+                let content = ImageRenderer.contentRect(image: source, state: EditState(), style: style)
+                let output = try ImageRenderer.render(image: source, state: EditState(), style: style)
+                XCTAssertEqual(content.origin, CGPoint(x: padding, y: padding))
+                XCTAssertEqual(output.width, 40 + padding * 2)
+                XCTAssertEqual(output.height, 30 + padding * 2)
+                XCTAssertEqual(pixel(output, x: padding + 20, y: padding + 15), [255, 0, 0, 255])
+            }
+        }
     }
 
     func testNativeChineseTextDrawsBothLines() throws {

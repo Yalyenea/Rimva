@@ -53,31 +53,36 @@ final class HotKey: ObservableObject {
     private var handler: EventHandlerRef?
     private var languageObserver: AnyCancellable?
     private var errorKey: String?
+    private let registersShortcuts: Bool
 
-    init() {
+    init(registersShortcuts: Bool = true) {
+        self.registersShortcuts = registersShortcuts
         languageObserver = NotificationCenter.default.publisher(for: .rimvaLanguageChanged)
             .sink { [weak self] _ in
                 guard let self else { return }
                 self.error = self.errorKey.map { L($0) }
             }
-        var type = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
-        let pointer = Unmanaged.passUnretained(self).toOpaque()
-        InstallEventHandler(GetApplicationEventTarget(), { _, event, data in
-            guard let event, let data else { return OSStatus(eventNotHandledErr) }
-            var id = EventHotKeyID()
-            let result = GetEventParameter(event, EventParamName(kEventParamDirectObject), EventParamType(typeEventHotKeyID), nil, MemoryLayout<EventHotKeyID>.size, nil, &id)
-            guard result == noErr, id.signature == shortcutSignature,
-                  let action = ShortcutAction(rawValue: id.id) else { return OSStatus(eventNotHandledErr) }
-            let hotKey = Unmanaged<HotKey>.fromOpaque(data).takeUnretainedValue()
-            // Carbon dispatches application events on the main thread.
-            MainActor.assumeIsolated {
-                if hotKey.recordingAction != nil {
-                    // Our registered combinations arrive as Carbon events while recording.
-                    if let combination = hotKey.combinations[action] { hotKey.recordingHandler?(combination) }
-                } else { hotKey.onTrigger?(action) }
-            }
-            return noErr
-        }, 1, &type, pointer, &handler)
+        // Preview processes display the same bindings without competing for the live app's keys.
+        if registersShortcuts {
+            var type = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
+            let pointer = Unmanaged.passUnretained(self).toOpaque()
+            InstallEventHandler(GetApplicationEventTarget(), { _, event, data in
+                guard let event, let data else { return OSStatus(eventNotHandledErr) }
+                var id = EventHotKeyID()
+                let result = GetEventParameter(event, EventParamName(kEventParamDirectObject), EventParamType(typeEventHotKeyID), nil, MemoryLayout<EventHotKeyID>.size, nil, &id)
+                guard result == noErr, id.signature == shortcutSignature,
+                      let action = ShortcutAction(rawValue: id.id) else { return OSStatus(eventNotHandledErr) }
+                let hotKey = Unmanaged<HotKey>.fromOpaque(data).takeUnretainedValue()
+                // Carbon dispatches application events on the main thread.
+                MainActor.assumeIsolated {
+                    if hotKey.recordingAction != nil {
+                        // Our registered combinations arrive as Carbon events while recording.
+                        if let combination = hotKey.combinations[action] { hotKey.recordingHandler?(combination) }
+                    } else { hotKey.onTrigger?(action) }
+                }
+                return noErr
+            }, 1, &type, pointer, &handler)
+        }
         var restoredError: String?
         for action in ShortcutAction.allCases {
             if let data = UserDefaults.standard.data(forKey: action.storageKey),
@@ -117,10 +122,12 @@ final class HotKey: ObservableObject {
             }
             guard !duplicate else { reportError("该组合键已用于其他截图操作，请换一个。"); return }
             // Keep the working shortcut registered until its replacement succeeds.
-            let id = EventHotKeyID(signature: shortcutSignature, id: action.rawValue)
-            // Exclusive registration reports an existing owner instead of sharing its keystrokes.
-            let result = RegisterEventHotKey(next.keyCode, next.modifiers, id, GetApplicationEventTarget(), OptionBits(kEventHotKeyExclusive), &newReference)
-            guard result == noErr else { reportError("快捷键已被占用，请换一个。"); return }
+            if registersShortcuts {
+                let id = EventHotKeyID(signature: shortcutSignature, id: action.rawValue)
+                // Exclusive registration reports an existing owner instead of sharing its keystrokes.
+                let result = RegisterEventHotKey(next.keyCode, next.modifiers, id, GetApplicationEventTarget(), OptionBits(kEventHotKeyExclusive), &newReference)
+                guard result == noErr else { reportError("快捷键已被占用，请换一个。"); return }
+            }
         }
         if let reference = references[action] { UnregisterEventHotKey(reference) }
         references[action] = newReference
@@ -203,7 +210,7 @@ final class RecorderButton: NSButton {
         let width = min(bounds.width - 1, max(44, ceil(labelSize.width) + 18))
         let rect = NSRect(x: bounds.maxX - width - 0.5, y: bounds.midY - 12, width: width, height: 24)
         let shape = NSBezierPath(roundedRect: rect, xRadius: 4, yRadius: 4)
-        (isHighlighted ? palette.selection : palette.elevated).setFill()
+        (recording || isHighlighted ? palette.selection : palette.elevated).setFill()
         shape.fill()
         let focused = window?.firstResponder === self
         (recording || focused ? palette.accent : palette.separator).setStroke()
@@ -211,7 +218,7 @@ final class RecorderButton: NSButton {
         shape.stroke()
         let labelRect = NSRect(x: rect.midX - labelSize.width / 2, y: rect.midY - labelSize.height / 2,
                                width: labelSize.width, height: labelSize.height)
-        (title as NSString).draw(in: labelRect, withAttributes: [.font: labelFont, .foregroundColor: contentTintColor ?? palette.text])
+        (title as NSString).draw(in: labelRect, withAttributes: [.font: labelFont, .foregroundColor: recording ? palette.accentText : contentTintColor ?? palette.text])
     }
 
     override func becomeFirstResponder() -> Bool {

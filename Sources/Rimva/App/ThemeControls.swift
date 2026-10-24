@@ -7,18 +7,24 @@ import SwiftUI
 struct ThemedSegments<Value: Hashable, Content: View>: View {
     @Binding var selection: Value
     var values: [Value]
+    var equalWidth = true
     @ViewBuilder var label: (Value) -> Content
     @ObservedObject private var preferences = Preferences.shared
+    @FocusState private var focusedValue: Value?
 
     var body: some View {
-        HStack(spacing: 4) {
+        HStack(spacing: 3) {
             ForEach(values, id: \.self) { value in
                 Button { selection = value } label: {
-                    label(value).lineLimit(1)
-                        .frame(maxWidth: .infinity, minHeight: 24)
+                    // Intrinsic text width plus padding keeps long theme names off the edges.
+                    label(value).lineLimit(1).fixedSize(horizontal: true, vertical: false)
+                        .padding(.horizontal, 10)
+                        .frame(maxWidth: equalWidth ? .infinity : nil, minHeight: 26)
                         .contentShape(Rectangle())
                 }
-                .buttonStyle(SegmentStyle(selected: selection == value, palette: preferences.palette))
+                .buttonStyle(SegmentStyle(selected: selection == value, focused: focusedValue == value, palette: preferences.palette))
+                .focused($focusedValue, equals: value)
+                .focusEffectDisabled()
                 .accessibilityAddTraits(selection == value ? .isSelected : [])
             }
         }
@@ -27,20 +33,21 @@ struct ThemedSegments<Value: Hashable, Content: View>: View {
 
     private struct SegmentStyle: ButtonStyle {
         var selected: Bool
+        var focused: Bool
         var palette: ThemePalette
         @Environment(\.isEnabled) private var isEnabled
 
         func makeBody(configuration: Configuration) -> some View {
             configuration.label
                 .font(.system(size: 12, weight: selected ? .medium : .regular))
-                .foregroundStyle(Color(nsColor: palette.text))
+                .foregroundStyle(Color(nsColor: selected ? palette.accentText : palette.text))
                 .background {
                     RoundedRectangle(cornerRadius: 4)
                         .fill(selected ? Color(nsColor: palette.selection) : .clear)
                 }
                 .overlay {
                     RoundedRectangle(cornerRadius: 4)
-                        .strokeBorder(Color(nsColor: palette.accent).opacity(selected ? 0.7 : 0), lineWidth: 1)
+                        .strokeBorder(Color(nsColor: palette.accent).opacity(focused ? 1 : selected ? 0.7 : 0), lineWidth: focused ? 1.5 : 1)
                 }
                 .opacity(!isEnabled ? 0.4 : configuration.isPressed ? 0.7 : 1)
         }
@@ -57,12 +64,12 @@ struct ThemedToggleStyle: ToggleStyle {
         let height: CGFloat = compact ? 16 : 18
         let palette = preferences.palette
         return Button { configuration.isOn.toggle() } label: {
-            Capsule().fill(Color(nsColor: configuration.isOn ? palette.selection : palette.elevated))
+            Capsule().fill(Color(nsColor: configuration.isOn ? palette.accent : palette.elevated))
                 .overlay {
                     Capsule().strokeBorder(Color(nsColor: palette.separator), lineWidth: 1)
                 }
                 .overlay(alignment: configuration.isOn ? .trailing : .leading) {
-                    Circle().fill(Color(nsColor: configuration.isOn ? palette.accent : palette.secondary))
+                    Circle().fill(Color(nsColor: configuration.isOn ? palette.onAccent : palette.secondary))
                         .frame(width: height - 6, height: height - 6).padding(3)
                 }
                 .frame(width: width, height: height)
@@ -170,7 +177,7 @@ final class ThemeSliderCell: NSSliderCell {
 
     override func drawKnob(_ knobRect: NSRect) {
         let knob = NSRect(x: knobRect.midX - 5, y: knobRect.midY - 5, width: 10, height: 10)
-        palette.accent.withAlphaComponent(isEnabled ? 1 : 0.4).setFill()
+        palette.accentText.withAlphaComponent(isEnabled ? 1 : 0.4).setFill()
         NSBezierPath(ovalIn: knob).fill()
     }
 }

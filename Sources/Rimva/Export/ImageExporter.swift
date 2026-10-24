@@ -40,6 +40,20 @@ enum ImageExporter {
         try png(image).write(to: url, options: .atomic)
     }
 
+    static func saveAutomatically(_ image: CGImage, in folder: URL) throws -> URL {
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let name = (suggestedName() as NSString).deletingPathExtension
+        var url = folder.appendingPathComponent(name + ".png")
+        var suffix = 2
+        // Rapid captures can share a timestamp; each capture must keep its own file.
+        while FileManager.default.fileExists(atPath: url.path) {
+            url = folder.appendingPathComponent("\(name) \(suffix).png")
+            suffix += 1
+        }
+        try save(image, to: url)
+        return url
+    }
+
     static func read(_ url: URL) throws -> CGImage {
         guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
               let type = CGImageSourceGetType(source),

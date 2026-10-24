@@ -15,6 +15,14 @@ build-debug:
 test:
     swift test --configuration release --scratch-path .tmp/swift-build
 
+# 自动生成设置与编辑器预览；可指定 all、rosePine、standard。
+preview theme="rosePine":
+    RIMVA_UI_PREVIEW_DIR="$PWD/.tmp/ui-preview" RIMVA_UI_PREVIEW_THEME="{{theme}}" swift test --configuration release --scratch-path .tmp/swift-build --filter UIPreviewTests/testRenderPreviews
+
+# 打开独立的样图窗口，关闭时不会出现保存提示。
+preview-live theme="rosePine":
+    RIMVA_UI_PREVIEW_DIR="$PWD/.tmp/ui-preview" RIMVA_UI_PREVIEW_THEME="{{theme}}" RIMVA_UI_PREVIEW_LIVE=1 swift test --configuration release --scratch-path .tmp/swift-build --filter UIPreviewTests/testRenderPreviews
+
 # 构建并启动开发应用；先退出已运行的 Rimva。
 run:
     #!/bin/zsh

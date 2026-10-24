@@ -26,12 +26,17 @@ final class EditorSession: ObservableObject {
     private struct Snapshot: Equatable { var state: EditState; var style: BackgroundStyle }
     @Published private(set) var image: CGImage?
     @Published var state = EditState() { didSet { updateHistory() } }
-    @Published var style = BackgroundStyle() { didSet { updateHistory() } }
+    @Published var style = BackgroundStyle() {
+        didSet {
+            updateHistory()
+            if style != Preferences.shared.defaultStyle { Preferences.shared.defaultStyle = style }
+        }
+    }
     @Published var tool: EditorTool = .select
     @Published var backgroundShown = false
     @Published var selectedID: UUID?
     @Published var pendingCrop: CGRect?
-    @Published var colorHex = "#F04444"
+    @Published var colorHex = "#EB6F92"
     @Published var lineWidth: Double = 6
     @Published var fontSize: Double = 32
     @Published var toast: String?
@@ -50,13 +55,27 @@ final class EditorSession: ObservableObject {
     private var savedBackgroundPath: String?
     private var copiedBackgroundPath: String?
     private var interaction: Snapshot?
+    private var styleSubscription: AnyCancellable?
     var finishEditing: (() -> Void)?
+
+    init() {
+        style = Preferences.shared.defaultStyle
+        // Listen after assignment so both directions see the completed value.
+        // External changes remain a single undoable step in an open document.
+        styleSubscription = NotificationCenter.default.publisher(for: .rimvaBackgroundStyleChanged)
+            .sink { [weak self] _ in
+                guard let self, self.style != Preferences.shared.defaultStyle else { return }
+                if self.image != nil, !self.isInteracting { self.checkpoint() }
+                self.style = Preferences.shared.defaultStyle
+            }
+    }
 
     private var snapshot: Snapshot { Snapshot(state: state, style: style) }
     private var renderedBackgroundPath: String? {
         style.enabled && style.source == .image ? style.imagePath(for: Preferences.shared.renderAppearance) : nil
     }
     var hasUnsavedChanges: Bool { image != nil && (snapshot != savedSnapshot || renderedBackgroundPath != savedBackgroundPath) }
+    var isInteracting: Bool { interaction != nil }
 
     var selected: Annotation? { state.annotations.first { $0.id == selectedID } }
     var outputSize: CGSize { guard let image else { return .zero }; return ImageRenderer.outputSize(image: image, state: state, style: style) }
@@ -77,6 +96,7 @@ final class EditorSession: ObservableObject {
     }
 
     func releaseImage() {
+        backgroundShown = false
         image = nil; state = EditState(); selectedID = nil; pendingCrop = nil
         savedURL = nil; savedSnapshot = nil; copiedSnapshot = nil; clipboardIsStale = false; interaction = nil
         savedBackgroundPath = nil; copiedBackgroundPath = nil

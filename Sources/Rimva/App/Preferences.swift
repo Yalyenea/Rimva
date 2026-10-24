@@ -14,7 +14,13 @@ enum AppAppearance: String, CaseIterable, Identifiable {
 final class Preferences: ObservableObject {
     static let shared = Preferences()
     private let storage = UserDefaults.standard
-    @Published var defaultStyle: BackgroundStyle { didSet { saveStyle() } }
+    @Published var defaultStyle: BackgroundStyle {
+        didSet {
+            guard defaultStyle != oldValue else { return }
+            saveStyle()
+            NotificationCenter.default.post(name: .rimvaBackgroundStyleChanged, object: nil)
+        }
+    }
     @Published var includesCursor: Bool { didSet { storage.set(includesCursor, forKey: "includesCursor") } }
     @Published var appearance: AppAppearance {
         didSet {
@@ -30,6 +36,7 @@ final class Preferences: ObservableObject {
         }
     }
     @Published var automaticCopy: Bool { didSet { storage.set(automaticCopy, forKey: "automaticCopy") } }
+    @Published var automaticSave: Bool { didSet { storage.set(automaticSave, forKey: "automaticSave") } }
     @Published var language: AppLanguage {
         didSet {
             storage.set(language.rawValue, forKey: "appLanguage")
@@ -51,6 +58,7 @@ final class Preferences: ObservableObject {
 
     private var appearanceObservation: NSKeyValueObservation?
     private var languageSubscription: AnyCancellable?
+    private var accentSubscription: AnyCancellable?
     private var preferredLanguages = Locale.preferredLanguages
 
     private init() {
@@ -64,6 +72,7 @@ final class Preferences: ObservableObject {
         appearance = AppAppearance(rawValue: storage.string(forKey: "appearance") ?? "system") ?? .system
         theme = AppTheme(rawValue: storage.string(forKey: "theme") ?? "rosePine") ?? .rosePine
         automaticCopy = storage.bool(forKey: "automaticCopy")
+        automaticSave = storage.bool(forKey: "automaticSave")
         let path = storage.string(forKey: "saveFolder") ?? NSHomeDirectory() + "/Pictures/Rimva"
         saveFolder = URL(fileURLWithPath: path, isDirectory: true)
         NSApp.appearance = appearance.native
@@ -73,6 +82,13 @@ final class Preferences: ObservableObject {
                 self?.notifyThemeChanged()
             }
         }
+        // The standard theme uses the macOS accent, which can change while Rimva runs.
+        accentSubscription = NotificationCenter.default.publisher(for: NSColor.systemColorsDidChangeNotification)
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                self?.objectWillChange.send()
+                self?.notifyThemeChanged()
+            }
         languageSubscription = NotificationCenter.default.publisher(for: NSLocale.currentLocaleDidChangeNotification)
             .merge(with: NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification))
             .receive(on: RunLoop.main)
@@ -122,4 +138,8 @@ final class Preferences: ObservableObject {
         panel.directoryURL = saveFolder
         if panel.runModal() == .OK, let url = panel.url { saveFolder = url }
     }
+}
+
+extension Notification.Name {
+    static let rimvaBackgroundStyleChanged = Notification.Name("rimvaBackgroundStyleChanged")
 }

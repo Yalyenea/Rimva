@@ -2,25 +2,44 @@ import Foundation
 import CoreGraphics
 
 public enum BackgroundPreset: String, CaseIterable, Codable, Identifiable {
-    case mist = "晨雾"
-    case white = "雾白"
-    case graphite = "石墨"
-    case sand = "浅沙"
-    case sage = "青灰"
-    case blue = "暮蓝"
+    case dawn = "晨曦"
+    case rose = "玫瑰"
+    case iris = "鸢尾"
+    case foam = "泡沫"
+    case pine = "松林"
+    case moon = "月夜"
+    case dawnAbstract = "晨曦·抽象"
+    case roseAbstract = "玫瑰·抽象"
+    case irisAbstract = "鸢尾·抽象"
+    case foamAbstract = "泡沫·抽象"
+    case pineAbstract = "松林·抽象"
+    case moonAbstract = "月夜·抽象"
 
     public var id: String { rawValue }
-    public var title: String { L(rawValue) }
+    public var name: String { L(String(rawValue.split(separator: "·")[0])) }
+    public var variantTitle: String { L(isAbstract ? "抽象" : "渐变") }
+    public var title: String { L("%@ · %@", name, variantTitle) }
+    private var isAbstract: Bool { rawValue.contains("·") }
 
-    public var colors: [String] {
+    private var resourceName: String {
+        let color: String
         switch self {
-        case .mist: ["#E9E7F1", "#DCE8ED"]
-        case .white: ["#F4F3F0"]
-        case .graphite: ["#25272A"]
-        case .sand: ["#F0E4D5", "#E8D3CA"]
-        case .sage: ["#DDE7E2", "#BACBC5"]
-        case .blue: ["#D4DFF0", "#B7C7E1"]
+        case .dawn, .dawnAbstract: color = "dawn"
+        case .rose, .roseAbstract: color = "rose"
+        case .iris, .irisAbstract: color = "iris"
+        case .foam, .foamAbstract: color = "foam"
+        case .pine, .pineAbstract: color = "pine"
+        case .moon, .moonAbstract: color = "moon"
         }
+        return "\(color)-\(isAbstract ? "abstract" : "gradient")"
+    }
+
+    public var imageURL: URL {
+        // Presets are required package assets, independent of the user's image library.
+        guard let url = Bundle.module.url(forResource: resourceName, withExtension: "png") else {
+            preconditionFailure("Missing bundled preset: \(resourceName).png")
+        }
+        return url
     }
 }
 
@@ -59,7 +78,7 @@ public struct BackgroundStyle: Equatable, Codable {
 
     public init(
         enabled: Bool = true,
-        preset: BackgroundPreset = .mist,
+        preset: BackgroundPreset = .iris,
         customHex: String? = nil,
         padding: Double = 48,
         rounded: Bool = true,
@@ -131,7 +150,7 @@ public struct Annotation: Identifiable, Equatable {
         end: CGPoint,
         id: UUID = UUID(),
         text: String = "",
-        colorHex: String = "#FF573D",
+        colorHex: String = "#EB6F92",
         lineWidth: Double = 4,
         fontSize: Double = 24,
         number: Int = 1

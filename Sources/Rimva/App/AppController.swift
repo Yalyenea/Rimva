@@ -8,7 +8,7 @@ import UniformTypeIdentifiers
 final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
     let session = EditorSession()
     let preferences = Preferences.shared
-    let hotKey = HotKey()
+    let hotKey: HotKey
     private let capture = CaptureCoordinator()
     private let captureLauncher = CaptureLauncher()
     private var editorWindow: NSWindow?
@@ -21,6 +21,11 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var captureWindows: [NSWindow] = []
     private weak var captureKeyWindow: NSWindow?
     private var previousApplication: NSRunningApplication?
+
+    init(hotKey: HotKey? = nil) {
+        self.hotKey = hotKey ?? HotKey()
+        super.init()
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -60,6 +65,14 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
                     self.session.notify(L("已自动复制当前成图；编辑后请重新复制。"))
                 }
                 catch { self.showError(error) }
+            }
+            if self.preferences.automaticSave {
+                do {
+                    let url = try ImageExporter.saveAutomatically(self.renderedImage(image), in: self.preferences.saveFolder)
+                    self.session.markSaved(to: url)
+                    self.preferences.lastSavedURL = url
+                    self.session.notify(L("已自动保存 %@", url.lastPathComponent))
+                } catch { self.showError(error) }
             }
         }
         capture.onCancel = { [weak self] in self?.restoreCaptureContext() }
@@ -115,7 +128,9 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
             let size = CGSize(width: min(940, available.width), height: min(700, available.height))
             let window = makeWindow(size: size, title: L("Rimva 设置"), resizable: true)
             window.minSize = CGSize(width: min(680, available.width), height: min(420, available.height))
-            let hosting = NSHostingView(rootView: SettingsView(preferences: preferences, hotKey: hotKey))
+            let hosting = NSHostingView(rootView: SettingsView(preferences: preferences, hotKey: hotKey) { [weak self] editing in
+                if editing { self?.session.beginInteraction() } else { self?.session.endInteraction() }
+            })
             hosting.sizingOptions = []
             window.contentView = hosting
             window.setFrame(CGRect(origin: window.frame.origin, size: size), display: false)
@@ -368,8 +383,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
         NSApp.mainMenu = main
 
         let status = statusItem ?? NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        status.button?.image = NSImage(systemSymbolName: "viewfinder", accessibilityDescription: "Rimva")
-        status.button?.image?.isTemplate = true
+        status.button?.image = Self.statusImage
         let menu = NSMenu()
         menu.addItem(item("截图入口", action: #selector(captureAction)))
         menu.addItem(item("区域截图", action: #selector(regionAction)))
@@ -384,6 +398,27 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
         menu.addItem(item("退出 Rimva", action: #selector(quitAction)))
         status.menu = menu; statusItem = status
     }
+
+    // Menu bar counterpart of AppIcon.icon: selection corners around a card.
+    private static let statusImage: NSImage = {
+        let image = NSImage(size: NSSize(width: 18, height: 18), flipped: false) { _ in
+            NSColor.black.set()
+            let corners = NSBezierPath()
+            for (x, y, dx, dy) in [(1.75, 1.75, 1.0, 1.0), (16.25, 1.75, -1.0, 1.0), (16.25, 16.25, -1.0, -1.0), (1.75, 16.25, 1.0, -1.0)] {
+                corners.move(to: NSPoint(x: x, y: y + 3.25 * dy))
+                corners.appendArc(from: NSPoint(x: x, y: y), to: NSPoint(x: x + 3.25 * dx, y: y), radius: 1.75)
+                corners.line(to: NSPoint(x: x + 3.25 * dx, y: y))
+            }
+            corners.lineWidth = 1.5
+            corners.lineCapStyle = .round
+            corners.stroke()
+            NSBezierPath(roundedRect: NSRect(x: 5, y: 5.75, width: 8, height: 6.5), xRadius: 1.5, yRadius: 1.5).fill()
+            return true
+        }
+        image.isTemplate = true
+        image.accessibilityDescription = "Rimva"
+        return image
+    }()
 
     private func item(_ title: String, action: Selector, key: String = "") -> NSMenuItem {
         let result = NSMenuItem(title: L(title), action: action, keyEquivalent: key); result.target = self; return result
