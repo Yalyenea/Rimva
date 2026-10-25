@@ -76,8 +76,8 @@ struct SettingsView: View {
                 ThemedSegments(selection: $preferences.language, values: AppLanguage.allCases) { Text($0.title) }
                     .frame(width: optionWidth).accessibilityLabel(L("界面语言"))
             }
-            settingsRow(L("登录启动")) {
-                Toggle(L("登录启动"), isOn: Binding(
+            settingsRow(L("登录后静默启动")) {
+                Toggle(L("登录后静默启动"), isOn: Binding(
                     get: { preferences.loginStatus == .enabled || preferences.loginStatus == .requiresApproval },
                     set: { preferences.setLaunchAtLogin($0) }
                 )).labelsHidden().toggleStyle(ThemedToggleStyle())
@@ -86,6 +86,15 @@ struct SettingsView: View {
                 Button { SMAppService.openSystemSettingsLoginItems() } label: {
                     Label(L("打开登录设置"), systemImage: "arrow.up.forward.square")
                 }.buttonStyle(.plain).padding(.top, 8)
+            }
+            settingsRow(L("隐藏菜单栏图标")) {
+                Toggle(L("隐藏菜单栏图标"), isOn: $preferences.hidesMenuBarIcon)
+                    .labelsHidden().toggleStyle(ThemedToggleStyle())
+            }
+            if preferences.hidesMenuBarIcon {
+                Text(L("重新打开 Rimva，再按 ⌘, 进入设置。"))
+                    .font(.system(size: 11)).foregroundStyle(Color(nsColor: palette.secondary))
+                    .fixedSize(horizontal: false, vertical: true).padding(.top, 6)
             }
         }
     }
@@ -106,6 +115,11 @@ struct SettingsView: View {
             settingsRow(L("自动复制")) {
                 Toggle(L("自动复制"), isOn: $preferences.automaticCopy)
                     .labelsHidden().toggleStyle(ThemedToggleStyle())
+            }
+            settingsRow(L("截图后打开编辑器")) {
+                Toggle(L("截图后打开编辑器"), isOn: $preferences.opensEditorAfterCapture)
+                    .labelsHidden().toggleStyle(ThemedToggleStyle())
+                    .help(L("关闭后，自动复制或保存成功便返回原应用。"))
             }
             settingsRow(L("屏幕录制")) {
                 HStack(spacing: 10) {

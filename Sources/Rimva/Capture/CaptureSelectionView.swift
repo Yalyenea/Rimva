@@ -5,10 +5,13 @@ import RimvaCore
 @MainActor
 final class CaptureSelectionView: NSView {
     var onActivate: (() -> Void)?
-    var onConfirm: (() -> Void)?
+    var onConfirm: ((Bool) -> Void)?
     var onCancel: (() -> Void)?
+    var toolbarSafeBounds: NSRect { didSet { needsLayout = true } }
     var isWindowMode = false { didSet { needsDisplay = true; invalidateCursorRects() } }
     var isScrollingMode = false { didSet { refreshLabels(); refresh() } }
+    var isFullScreenMode = false { didSet { selection = isFullScreenMode ? bounds : nil; refresh() } }
+    private var windowSelectionLocked = false
     var selectedRect: NSRect? { selection }
     var canConfirm: Bool {
         guard let selection, let pixelRect else { return false }
@@ -24,8 +27,9 @@ final class CaptureSelectionView: NSView {
     private var startRect = NSRect.zero
     private var tracking: NSTrackingArea?
     private let toolbar = CaptureToolbarSurface()
-    private let cancelButton = NSButton(title: "", target: nil, action: nil)
-    private let confirmButton = NSButton(title: "", target: nil, action: nil)
+    private let cancelButton = CaptureActionButton(title: "", target: nil, action: nil)
+    private let editorButton = CaptureActionButton(title: "", target: nil, action: nil)
+    private let confirmButton = CaptureActionButton(title: "", target: nil, action: nil)
     private let widthField = NSTextField(string: "")
     private let heightField = NSTextField(string: "")
     private let ratioPicker = NSPopUpButton(frame: .zero, pullsDown: false)
@@ -40,19 +44,26 @@ final class CaptureSelectionView: NSView {
         self.image = image
         preview = NSImage(cgImage: image, size: size)
         self.windowRects = windowRects
+        toolbarSafeBounds = NSRect(origin: .zero, size: size)
         super.init(frame: NSRect(origin: .zero, size: size))
         appearance = Preferences.shared.appearance.native
         addSubview(toolbar)
-        for button in [cancelButton, confirmButton] {
+        for button in [cancelButton, editorButton, confirmButton] {
             button.cell = CaptureActionCell(textCell: "")
             button.setButtonType(.momentaryPushIn)
             button.isBordered = false
             button.focusRingType = .none
-            button.font = .systemFont(ofSize: 12, weight: button === confirmButton ? .medium : .regular)
+            button.font = .systemFont(ofSize: 12, weight: .medium)
             button.target = self
             toolbar.addSubview(button)
         }
+        (cancelButton.cell as? CaptureActionCell)?.symbol = "xmark"
+        (cancelButton.cell as? CaptureActionCell)?.showsTitle = false
+        (editorButton.cell as? CaptureActionCell)?.symbol = "square.and.pencil"
+        (confirmButton.cell as? CaptureActionCell)?.symbol = "viewfinder"
         cancelButton.action = #selector(cancelSelection)
+        editorButton.action = #selector(editSelection)
+        editorButton.isEnabled = false
         confirmButton.action = #selector(confirmSelection)
         confirmButton.isEnabled = false
         for field in [widthField, heightField] {
@@ -84,6 +95,10 @@ final class CaptureSelectionView: NSView {
     @objc private func refreshLabels() {
         cancelButton.title = L("取消")
         cancelButton.toolTip = L("取消 Esc")
+        editorButton.title = L("编辑")
+        editorButton.toolTip = L("在编辑器中打开")
+        editorButton.setAccessibilityLabel(L("在编辑器中打开"))
+        editorButton.isHidden = isScrollingMode
         confirmButton.title = isScrollingMode ? L("开始") : L("截图")
         confirmButton.toolTip = isScrollingMode ? L("按回车开始") : L("按回车截图")
         let ratio = max(0, ratioPicker.indexOfSelectedItem)
@@ -100,7 +115,7 @@ final class CaptureSelectionView: NSView {
     @objc private func refreshAppearance() {
         appearance = Preferences.shared.appearance.native
         for field in [widthField, heightField] { field.textColor = Preferences.shared.palette.text }
-        for view in [toolbar, cancelButton, confirmButton, widthField, heightField, ratioPicker] { view.needsDisplay = true }
+        for view in [toolbar, cancelButton, editorButton, confirmButton, widthField, heightField, ratioPicker] { view.needsDisplay = true }
         needsDisplay = true
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
@@ -108,24 +123,50 @@ final class CaptureSelectionView: NSView {
 
     override func layout() {
         super.layout()
-        let showPrecision = selection != nil && !isWindowMode
-        // Equal action widths follow the longest localized title, with no reserved shortcut slot.
-        let actionWidth = ceil(max(cancelButton.attributedTitle.size().width, confirmButton.attributedTitle.size().width) + 16)
-        let width: CGFloat = (showPrecision ? 238 : 16) + actionWidth * 2
-        let x = max(8, min((selection?.midX ?? bounds.midX) - width / 2, bounds.width - width - 8))
-        let below = (selection?.minY ?? 74) - 44
-        let above = (selection?.maxY ?? 0) + 10
-        let y = max(8, min(below >= 8 ? below : above, bounds.height - 42))
-        toolbar.frame = NSRect(x: x, y: y, width: width, height: 34)
+        let showPrecision = selection != nil && !isWindowMode && !isFullScreenMode
+        // Keep the launcher's colors and hover treatment, with one compact row for capture actions.
+        let cancelWidth: CGFloat = 28
+        let editorWidth = max(64, ceil(editorButton.attributedTitle.size().width + 38))
+        let confirmWidth = max(80, ceil(confirmButton.attributedTitle.size().width + 38))
+        let editorSpace = isScrollingMode ? 0 : editorWidth + 6
+        let actionsWidth = 16 + cancelWidth + 6 + editorSpace + confirmWidth
+        let width = showPrecision ? max(240, actionsWidth) : actionsWidth
+        let height: CGFloat = showPrecision ? 76 : 44
+        toolbar.frame = Self.toolbarFrame(selection: selection, safeBounds: toolbarSafeBounds,
+                                          size: NSSize(width: width, height: height))
         toolbar.showsPrecision = showPrecision
+        toolbar.precisionOrigin = NSPoint(x: (width - 224) / 2, y: 44)
         for field in [widthField, heightField] { field.isHidden = !showPrecision }
         ratioPicker.isHidden = !showPrecision
-        widthField.frame = NSRect(x: 6, y: 5, width: 48, height: 24)
-        heightField.frame = NSRect(x: 72, y: 5, width: 48, height: 24)
-        ratioPicker.frame = NSRect(x: 156, y: 5, width: 56, height: 24)
-        let buttonX: CGFloat = showPrecision ? 228 : 6
-        cancelButton.frame = NSRect(x: buttonX, y: 5, width: actionWidth, height: 24)
-        confirmButton.frame = NSRect(x: buttonX + actionWidth + 4, y: 5, width: actionWidth, height: 24)
+        let origin = toolbar.precisionOrigin
+        widthField.frame = NSRect(x: origin.x + 6, y: origin.y, width: 48, height: 24)
+        heightField.frame = NSRect(x: origin.x + 72, y: origin.y, width: 48, height: 24)
+        ratioPicker.frame = NSRect(x: origin.x + 156, y: origin.y, width: 56, height: 24)
+        let buttonX = (width - actionsWidth) / 2 + 8
+        cancelButton.frame = NSRect(x: buttonX, y: 8, width: cancelWidth, height: 28)
+        editorButton.frame = NSRect(x: buttonX + cancelWidth + 6, y: 8, width: editorWidth, height: 28)
+        confirmButton.frame = NSRect(x: buttonX + cancelWidth + 6 + editorSpace, y: 8, width: confirmWidth, height: 28)
+    }
+
+    static func toolbarFrame(selection: NSRect?, safeBounds: NSRect, size: NSSize) -> NSRect {
+        let safe = safeBounds.insetBy(dx: 12, dy: 12)
+        let x = min(max(safe.minX, (selection?.midX ?? safe.midX) - size.width / 2), safe.maxX - size.width)
+        var y = safe.minY
+        if let selection {
+            let below = selection.minY - 10 - size.height
+            let above = selection.maxY + 10
+            if below >= safe.minY {
+                y = below
+            } else if above + size.height <= safe.maxY {
+                y = above
+            } else {
+                // A maximized window has no room outside it. Keep actions inside its lower edge,
+                // rather than pushing them into the menu bar or camera housing.
+                y = max(safe.minY, selection.minY + 12)
+            }
+        }
+        y = min(max(safe.minY, y), safe.maxY - size.height)
+        return NSRect(origin: NSPoint(x: x, y: y), size: size)
     }
 
     override func updateTrackingAreas() {
@@ -137,6 +178,7 @@ final class CaptureSelectionView: NSView {
     }
 
     override func resetCursorRects() {
+        if isFullScreenMode { addCursorRect(bounds, cursor: .arrow); return }
         addCursorRect(bounds, cursor: isWindowMode ? .pointingHand : .crosshair)
         guard !isWindowMode, let selection else { return }
         addCursorRect(selection, cursor: .openHand)
@@ -148,12 +190,13 @@ final class CaptureSelectionView: NSView {
 
     func clearSelection() {
         selection = nil
+        windowSelectionLocked = false
         drag = nil
         refresh()
     }
 
     func updateWindowSelection(at point: NSPoint) {
-        guard isWindowMode else { return }
+        guard isWindowMode, !windowSelectionLocked else { return }
         selection = windowRects.first(where: { $0.contains(point) })?.intersection(bounds)
         refresh()
     }
@@ -173,11 +216,14 @@ final class CaptureSelectionView: NSView {
         onActivate?()
         window?.makeKey()
         window?.makeFirstResponder(self)
+        guard !isFullScreenMode else { return }
         let point = clamped(convert(event.locationInWindow, from: nil))
         pointer = point
         if isWindowMode {
+            windowSelectionLocked = false
             updateWindowSelection(at: point)
-            if canConfirm { onConfirm?() }
+            // Lock the clicked window so moving to the toolbar cannot change the capture target.
+            windowSelectionLocked = canConfirm
             return
         }
         startPoint = point
@@ -250,7 +296,7 @@ final class CaptureSelectionView: NSView {
             let outline = NSBezierPath(rect: selection.insetBy(dx: 0.5, dy: 0.5))
             outline.lineWidth = 2
             outline.stroke()
-            if !isWindowMode {
+            if !isWindowMode && !isFullScreenMode {
                 for point in handles(for: selection) {
                     let handle = NSBezierPath(roundedRect: NSRect(x: point.x - 4, y: point.y - 4, width: 8, height: 8), xRadius: 2, yRadius: 2)
                     NSColor.white.setFill()
@@ -264,12 +310,11 @@ final class CaptureSelectionView: NSView {
             if let pixelRect, isWindowMode || (isScrollingMode && !canConfirm) {
                 let text = isScrollingMode && !canConfirm ? L("长截屏选区至少为 40 × 80 pt") : "\(Int(pixelRect.width)) × \(Int(pixelRect.height)) px"
                 let y = selection.maxY + 10 > bounds.height - 80 ? max(80, selection.minY - 36) : selection.maxY + 10
-                drawBadge(text, centerX: selection.midX, y: y, fontSize: 13)
+                drawBadge(text, centerX: selection.midX, y: y, fontSize: 11)
             }
         }
-        if let pointer, !isWindowMode, selection == nil || drag != nil { drawMagnifier(at: pointer) }
-        let hint = isScrollingMode ? L("拖动选择滚动区域  ·  方向键微调  ·  回车：开始") : isWindowMode ? L("点选窗口  ·  空格：区域选择") : L("方向键移动  ·  ⇧ 10 px  ·  ⌥ 调整尺寸  ·  空格切换窗口")
-        drawBadge(hint, centerX: bounds.midX, y: bounds.height - 64, fontSize: 14)
+        if let pointer, !isWindowMode, !isFullScreenMode, selection == nil || drag != nil { drawMagnifier(at: pointer) }
+
     }
 
     func selectedImage() -> CGImage? {
@@ -292,6 +337,7 @@ final class CaptureSelectionView: NSView {
 
     private func refresh() {
         confirmButton.isEnabled = canConfirm
+        editorButton.isEnabled = canConfirm
         needsLayout = true
         if let pixelRect {
             widthField.integerValue = Int(pixelRect.width); heightField.integerValue = Int(pixelRect.height)
@@ -301,7 +347,7 @@ final class CaptureSelectionView: NSView {
     }
 
     override func keyDown(with event: NSEvent) {
-        guard [123, 124, 125, 126].contains(event.keyCode), !isWindowMode, var selection else { super.keyDown(with: event); return }
+        guard [123, 124, 125, 126].contains(event.keyCode), !isWindowMode, !isFullScreenMode, var selection else { super.keyDown(with: event); return }
         let step: CGFloat = event.modifierFlags.contains(.shift) ? 10 : 1
         let dx: CGFloat = event.keyCode == 123 ? -step : event.keyCode == 124 ? step : 0
         let dy: CGFloat = event.keyCode == 125 ? -step : event.keyCode == 126 ? step : 0
@@ -372,17 +418,20 @@ final class CaptureSelectionView: NSView {
          NSPoint(x: r.minX, y: r.maxY), NSPoint(x: r.minX, y: r.midY)]
     }
     private func drawBadge(_ text: String, centerX: CGFloat, y: CGFloat, fontSize: CGFloat) {
-        let attributes: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: fontSize, weight: .medium), .foregroundColor: NSColor.white]
+        let palette = Preferences.shared.palette
+        let attributes: [NSAttributedString.Key: Any] = [.font: NSFont.monospacedDigitSystemFont(ofSize: fontSize, weight: .regular), .foregroundColor: palette.secondary]
         let size = (text as NSString).size(withAttributes: attributes)
-        let width = size.width + 24
-        let box = NSRect(x: min(max(12, centerX - width / 2), bounds.width - width - 12), y: y, width: width, height: size.height + 16)
-        NSColor.black.withAlphaComponent(0.78).setFill()
-        NSBezierPath(roundedRect: box, xRadius: 8, yRadius: 8).fill()
-        (text as NSString).draw(at: NSPoint(x: box.minX + 12, y: box.minY + 8), withAttributes: attributes)
+        let width = size.width + 16
+        let box = NSRect(x: min(max(12, centerX - width / 2), bounds.width - width - 12), y: y, width: width, height: size.height + 12)
+        let shape = NSBezierPath(roundedRect: box, xRadius: 6, yRadius: 6)
+        palette.background.setFill(); shape.fill()
+        palette.separator.setStroke(); shape.lineWidth = 0.5; shape.stroke()
+        (text as NSString).draw(at: NSPoint(x: box.minX + 8, y: box.minY + 6), withAttributes: attributes)
     }
 
     @objc private func cancelSelection() { onCancel?() }
-    @objc private func confirmSelection() { if canConfirm { onConfirm?() } else { NSSound.beep() } }
+    @objc private func editSelection() { if canConfirm { onConfirm?(true) } else { NSSound.beep() } }
+    @objc private func confirmSelection() { if canConfirm { onConfirm?(false) } else { NSSound.beep() } }
 }
 
 @MainActor
@@ -409,23 +458,25 @@ private enum CaptureToolbarDrawing {
 
 @MainActor
 private final class CaptureToolbarSurface: NSView {
+    var precisionOrigin = NSPoint.zero { didSet { needsDisplay = true } }
     var showsPrecision = false { didSet { if oldValue != showsPrecision { needsDisplay = true } } }
 
     override func draw(_ dirtyRect: NSRect) {
         let palette = Preferences.shared.palette
-        let shape = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5), xRadius: 6, yRadius: 6)
+        let shape = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5), xRadius: 9, yRadius: 9)
         // Use exactly the launcher's theme colors; screenshots and mockups can carry different color profiles.
         palette.background.setFill(); shape.fill()
         palette.separator.setStroke(); shape.lineWidth = 0.5; shape.stroke()
         guard showsPrecision else { return }
-        CaptureToolbarDrawing.label("×", in: NSRect(x: 58, y: 5, width: 10, height: 24), color: palette.secondary)
-        CaptureToolbarDrawing.label("px", in: NSRect(x: 126, y: 5, width: 14, height: 24),
+        let origin = precisionOrigin
+        CaptureToolbarDrawing.label("×", in: NSRect(x: origin.x + 58, y: origin.y, width: 10, height: 24), color: palette.secondary)
+        CaptureToolbarDrawing.label("px", in: NSRect(x: origin.x + 126, y: origin.y, width: 14, height: 24),
                                     font: .systemFont(ofSize: 10), color: palette.secondary)
         palette.separator.setStroke()
-        for x: CGFloat in [148, 220] {
-            let divider = NSBezierPath(); divider.move(to: NSPoint(x: x, y: 10)); divider.line(to: NSPoint(x: x, y: 24))
-            divider.lineWidth = 0.5; divider.stroke()
-        }
+        let divider = NSBezierPath()
+        divider.move(to: NSPoint(x: origin.x + 148, y: origin.y + 5))
+        divider.line(to: NSPoint(x: origin.x + 148, y: origin.y + 19))
+        divider.lineWidth = 0.5; divider.stroke()
     }
 
     override func resetCursorRects() { addCursorRect(bounds, cursor: .arrow) }
@@ -434,15 +485,54 @@ private final class CaptureToolbarSurface: NSView {
 }
 
 @MainActor
+private final class CaptureActionButton: NSButton {
+    private var hoverTracking: NSTrackingArea?
+
+    override func updateTrackingAreas() {
+        if let hoverTracking { removeTrackingArea(hoverTracking) }
+        let area = NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self)
+        addTrackingArea(area); hoverTracking = area
+        super.updateTrackingAreas()
+    }
+    override func mouseEntered(with event: NSEvent) {
+        (cell as? CaptureActionCell)?.hovered = true; needsDisplay = true
+    }
+    override func mouseExited(with event: NSEvent) {
+        (cell as? CaptureActionCell)?.hovered = false; needsDisplay = true
+    }
+}
+
+@MainActor
 private final class CaptureActionCell: NSButtonCell {
+    var symbol = ""
+    var showsTitle = true
+    var hovered = false
+
     override func draw(withFrame cellFrame: NSRect, in controlView: NSView) {
         drawInterior(withFrame: cellFrame, in: controlView)
     }
 
-    override func drawInterior(withFrame cellFrame: NSRect, in controlView: NSView) {
-        CaptureToolbarDrawing.cell(cellFrame, pressed: isHighlighted, focused: controlView.window?.firstResponder === controlView)
-        CaptureToolbarDrawing.label(title, in: cellFrame, font: font ?? .systemFont(ofSize: 12),
-                                    color: isEnabled ? Preferences.shared.palette.text : Preferences.shared.palette.secondary)
+    override func drawInterior(withFrame rect: NSRect, in controlView: NSView) {
+        let palette = Preferences.shared.palette
+        let focused = controlView.window?.firstResponder === controlView
+        let active = isEnabled && (hovered || isHighlighted || focused)
+        let shape = NSBezierPath(roundedRect: rect.insetBy(dx: 0.25, dy: 0.25), xRadius: 6, yRadius: 6)
+        (active ? palette.selection : palette.elevated).setFill(); shape.fill()
+        (active ? palette.accent : palette.separator).setStroke(); shape.lineWidth = 0.5; shape.stroke()
+        let foreground = isEnabled ? palette.text : palette.secondary.withAlphaComponent(0.5)
+        let iconSize: CGFloat = showsTitle ? 14 : 12
+        let configuration = NSImage.SymbolConfiguration(pointSize: iconSize, weight: .regular)
+            .applying(.init(paletteColors: [foreground]))
+        let iconX = showsTitle ? rect.minX + 8 : rect.midX - iconSize / 2
+        NSImage(systemSymbolName: symbol, accessibilityDescription: nil)?
+            .withSymbolConfiguration(configuration)?.draw(in: NSRect(x: iconX, y: rect.midY - iconSize / 2,
+                                                                      width: iconSize, height: iconSize))
+        guard showsTitle else { return }
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: 12, weight: .medium), .foregroundColor: foreground
+        ]
+        let textHeight = (title as NSString).size(withAttributes: attributes).height
+        (title as NSString).draw(at: NSPoint(x: rect.minX + 28, y: rect.midY - textHeight / 2), withAttributes: attributes)
     }
 }
 

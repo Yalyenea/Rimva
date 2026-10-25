@@ -232,3 +232,9 @@
 "画面未变化" = "No change in the image";
 "无法注册 Esc 取消键，请关闭占用 Esc 的应用后重试。" = "Could not register Esc. Close the app using Esc and try again.";
 "%@（%@）" = "%@ (%@)";
+"登录后静默启动" = "Launch quietly at login";
+"隐藏菜单栏图标" = "Hide menu bar icon";
+"重新打开 Rimva，再按 ⌘, 进入设置。" = "Reopen Rimva and press ⌘, for settings.";
+"截图后打开编辑器" = "Open editor after capture";
+"关闭后，自动复制或保存成功便返回原应用。" = "When off, return to your app after automatic copy or save succeeds.";
+"在编辑器中打开" = "Open in Editor";

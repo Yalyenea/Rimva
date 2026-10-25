@@ -6,6 +6,37 @@ import XCTest
 @testable import Rimva
 
 final class UIPreviewTests: XCTestCase {
+    @MainActor func testCaptureActionPreviews() throws {
+        guard let path = ProcessInfo.processInfo.environment["RIMVA_UI_PREVIEW_DIR"] else {
+            throw XCTSkip("Run with RIMVA_UI_PREVIEW_DIR to generate capture controls.")
+        }
+        _ = NSApplication.shared
+        let preferences = Preferences.shared
+        let original = (preferences.theme, preferences.language, preferences.appearance)
+        defer {
+            preferences.theme = original.0; preferences.language = original.1; preferences.appearance = original.2
+        }
+        let output = URL(fileURLWithPath: path, isDirectory: true)
+        try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
+        for theme in AppTheme.allCases {
+            preferences.theme = theme
+            for (code, language) in [("en", AppLanguage.english), ("zh", .chinese)] {
+                preferences.language = language
+                for appearance in [AppAppearance.light, .dark] {
+                    preferences.appearance = appearance
+                    let bounds = NSRect(x: 0, y: 0, width: 900, height: 600)
+                    let view = CaptureSelectionView(image: try XCTUnwrap(SampleImage.make()), size: bounds.size, windowRects: [bounds])
+                    view.toolbarSafeBounds = NSRect(x: 0, y: 60, width: 900, height: 502)
+                    view.isWindowMode = true
+                    view.updateWindowSelection(at: NSPoint(x: 450, y: 300))
+                    view.layoutSubtreeIfNeeded()
+                    let toolbar = try XCTUnwrap(view.subviews.first)
+                    try saveView(toolbar, to: output.appendingPathComponent("capture-\(theme.rawValue)-\(code)-\(appearance.rawValue).png"))
+                }
+            }
+        }
+    }
+
     @MainActor func testRenderPreviews() async throws {
         guard let path = ProcessInfo.processInfo.environment["RIMVA_UI_PREVIEW_DIR"] else {
             throw XCTSkip("Run just preview to generate UI images.")

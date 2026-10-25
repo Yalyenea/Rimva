@@ -1,4 +1,5 @@
 import AppKit
+import Carbon
 import Combine
 import SwiftUI
 import RimvaCore
@@ -16,6 +17,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var statusItem: NSStatusItem?
     private var capturePending = false
     private var languageSubscription: AnyCancellable?
+    private var menuBarSubscription: AnyCancellable?
     private var themeSubscription: AnyCancellable?
     private var documentSubscription: AnyCancellable?
     private var captureWindows: [NSWindow] = []
@@ -54,27 +56,10 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 window.contentView?.needsDisplay = true
             }
         }
-        capture.onCapture = { [weak self] image in
-            guard let self else { return }
-            self.session.load(image); self.showEditor(); self.preferences.refreshSystemStatus()
-            self.clearCaptureContext()
-            if self.preferences.automaticCopy {
-                do {
-                    try ImageExporter.copy(self.renderedImage(image))
-                    self.session.markCopied()
-                    self.session.notify(L("已自动复制当前成图；编辑后请重新复制。"))
-                }
-                catch { self.showError(error) }
-            }
-            if self.preferences.automaticSave {
-                do {
-                    let url = try ImageExporter.saveAutomatically(self.renderedImage(image), in: self.preferences.saveFolder)
-                    self.session.markSaved(to: url)
-                    self.preferences.lastSavedURL = url
-                    self.session.notify(L("已自动保存 %@", url.lastPathComponent))
-                } catch { self.showError(error) }
-            }
+        menuBarSubscription = preferences.$hidesMenuBarIcon.sink { [weak self] hidden in
+            self?.statusItem?.isVisible = !hidden
         }
+        capture.onCapture = { [weak self] image, opensEditor in self?.finishCapture(image, opensEditor: opensEditor) }
         capture.onCancel = { [weak self] in self?.restoreCaptureContext() }
         capture.onError = { [weak self] error in
             guard let self else { return }
@@ -95,7 +80,53 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let arguments = ProcessInfo.processInfo.arguments
         if arguments.contains("--demo"), let image = SampleImage.make() { session.load(image) }
         if let index = arguments.firstIndex(of: "--image"), arguments.indices.contains(index + 1) { importImage(URL(fileURLWithPath: arguments[index + 1])) }
-        showEditor()
+        // Login items receive an open-application event with the login launch marker.
+        // Manual launches remain a way back into settings when the menu icon is hidden.
+        if !Self.isLoginLaunch(NSAppleEventManager.shared().currentAppleEvent) { showEditor() }
+    }
+
+    static func isLoginLaunch(_ event: NSAppleEventDescriptor?) -> Bool {
+        event?.eventID == kAEOpenApplication &&
+            event?.paramDescriptor(forKeyword: keyAEPropData)?.enumCodeValue == keyAELaunchedAsLogInItem
+    }
+
+    func finishCapture(_ image: CGImage, opensEditor: Bool = false) {
+        session.load(image)
+        preferences.refreshSystemStatus()
+        var outputError: Error?
+        if preferences.automaticCopy {
+            do {
+                try ImageExporter.copy(renderedImage(image))
+                session.markCopied()
+                session.notify(L("已自动复制当前成图；编辑后请重新复制。"))
+            } catch { outputError = error }
+        }
+        if preferences.automaticSave {
+            do {
+                let url = try ImageExporter.saveAutomatically(renderedImage(image), in: preferences.saveFolder)
+                session.markSaved(to: url)
+                preferences.lastSavedURL = url
+                session.notify(L("已自动保存 %@", url.lastPathComponent))
+            } catch { outputError = error }
+        }
+        if opensEditor || preferences.opensEditorAfterCapture || outputError != nil ||
+            (!preferences.automaticCopy && !preferences.automaticSave) {
+            clearCaptureContext()
+            showEditor()
+            if let outputError { showError(outputError) }
+        } else {
+            // A completed quick capture must not prompt to save again on the next capture.
+            session.releaseImage()
+            // Activating the selection overlay can bring previously ordered-out windows back.
+            editorWindow?.orderOut(nil)
+            settingsWindow?.orderOut(nil)
+            if let previousApplication, previousApplication.processIdentifier != ProcessInfo.processInfo.processIdentifier {
+                previousApplication.activate(options: [])
+            } else {
+                NSApp.hide(nil)
+            }
+            clearCaptureContext()
+        }
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool { showEditor(); return true }
@@ -397,6 +428,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
         menu.addItem(.separator())
         menu.addItem(item("退出 Rimva", action: #selector(quitAction)))
         status.menu = menu; statusItem = status
+        status.isVisible = !preferences.hidesMenuBarIcon
     }
 
     // Menu bar counterpart of AppIcon.icon: selection corners around a card.

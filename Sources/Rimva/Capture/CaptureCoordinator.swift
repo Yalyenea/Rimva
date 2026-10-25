@@ -9,7 +9,7 @@ enum CaptureMode {
 
 @MainActor
 final class CaptureCoordinator {
-    var onCapture: ((CGImage) -> Void)?
+    var onCapture: ((CGImage, Bool) -> Void)?
     var onCancel: (() -> Void)?
     var onError: ((Error) -> Void)?
     private(set) var isCapturing = false
@@ -74,10 +74,6 @@ final class CaptureCoordinator {
                     guard self.sessionID == id else { return }
                     snapshots.append((screen, image))
                 }
-                if mode == .fullScreen, let image = snapshots.first?.1 {
-                    self.finish(image)
-                    return
-                }
                 self.showSelection(snapshots, windows: content.windows)
             } catch is CancellationError {
                 // cancel() already releases the session and calls its completion.
@@ -112,14 +108,23 @@ final class CaptureCoordinator {
                 return global.offsetBy(dx: -screen.frame.minX, dy: -screen.frame.minY)
             }
             let view = CaptureSelectionView(image: image, size: screen.frame.size, windowRects: windowRects)
+            // visibleFrame excludes the menu bar and Dock; safeAreaInsets also covers the notch
+            // when the menu bar is hidden. Convert global screen coordinates to this overlay.
+            let insets = screen.safeAreaInsets
+            let safeFrame = NSRect(x: screen.frame.minX + insets.left, y: screen.frame.minY + insets.bottom,
+                                   width: screen.frame.width - insets.left - insets.right,
+                                   height: screen.frame.height - insets.top - insets.bottom)
+            view.toolbarSafeBounds = screen.visibleFrame.intersection(safeFrame)
+                .offsetBy(dx: -screen.frame.minX, dy: -screen.frame.minY)
             view.isWindowMode = mode == .window
             view.isScrollingMode = mode == .scrolling
+            view.isFullScreenMode = mode == .fullScreen
             view.onActivate = { [weak self, weak view] in
                 guard let self, let view else { return }
                 self.activeView = view
                 self.views.filter { $0 !== view }.forEach { $0.clearSelection() }
             }
-            view.onConfirm = { [weak self, weak view] in
+            view.onConfirm = { [weak self, weak view] opensEditor in
                 guard let self, let view else { return }
                 if self.mode == .scrolling {
                     guard view.canConfirm, let region = view.selectedRect else { NSSound.beep(); return }
@@ -129,7 +134,7 @@ final class CaptureCoordinator {
                     return
                 }
                 guard let image = view.selectedImage() else { NSSound.beep(); return }
-                self.finish(image)
+                self.finish(image, opensEditor: opensEditor)
             }
             view.onCancel = { [weak self] in self?.cancel() }
             let panel = CapturePanel(contentRect: screen.frame, styleMask: .borderless, backing: .buffered, defer: false)
@@ -152,11 +157,11 @@ final class CaptureCoordinator {
             switch event.keyCode {
             case 53: self.cancel(); return nil
             case 36, 76:
-                if self.activeView?.canConfirm == true { self.activeView?.onConfirm?() }
+                if self.activeView?.canConfirm == true { self.activeView?.onConfirm?(false) }
                 else { NSSound.beep() }
                 return nil
             case 49:
-                guard self.mode != .scrolling else { return nil }
+                guard self.mode != .scrolling, self.mode != .fullScreen else { return nil }
                 self.mode = self.mode == .window ? .region : .window
                 self.views.forEach { $0.isWindowMode = self.mode == .window; $0.clearSelection() }
                 if let view = self.views.first(where: { $0.window?.frame.contains(NSEvent.mouseLocation) == true }) {
@@ -180,9 +185,9 @@ final class CaptureCoordinator {
         }
     }
 
-    private func finish(_ image: CGImage) {
+    private func finish(_ image: CGImage, opensEditor: Bool = false) {
         cleanUp()
-        onCapture?(image)
+        onCapture?(image, opensEditor)
     }
 
     private func beginScrolling(screen: NSScreen, region: NSRect, target: NSRunningApplication?) {
@@ -195,7 +200,7 @@ final class CaptureCoordinator {
         // so it receives scrolling and keeps the same window in front.
         target?.activate(options: [])
         let session = ScrollingCaptureSession(screen: screen, region: region, includesCursor: includesCursor)
-        session.onComplete = { [weak self] in self?.finish($0) }
+        session.onComplete = { [weak self] image, opensEditor in self?.finish(image, opensEditor: opensEditor) }
         session.onCancel = { [weak self] in self?.cancel() }
         session.onReselect = { [weak self] in
             guard let self else { return }

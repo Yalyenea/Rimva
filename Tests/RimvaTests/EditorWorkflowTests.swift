@@ -1,4 +1,5 @@
 import AppKit
+import Carbon
 import XCTest
 import RimvaCore
 @testable import Rimva
@@ -23,6 +24,55 @@ final class EditorWorkflowTests: XCTestCase {
         context.setFillColor(NSColor.red.cgColor)
         context.fill(CGRect(x: 0, y: 0, width: width, height: height))
         return try XCTUnwrap(context.makeImage())
+    }
+
+    @MainActor func testQuickCaptureSavesWithoutLeavingUnsavedDocument() throws {
+        let preferences = Preferences.shared
+        let originalCopy = preferences.automaticCopy
+        let originalSave = preferences.automaticSave
+        let originalOpen = preferences.opensEditorAfterCapture
+        let originalFolder = preferences.saveFolder
+        let originalURL = preferences.lastSavedURL
+        let folder = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent(".tmp/capture-test-\(UUID().uuidString)")
+        defer {
+            preferences.automaticCopy = originalCopy
+            preferences.automaticSave = originalSave
+            preferences.opensEditorAfterCapture = originalOpen
+            preferences.saveFolder = originalFolder
+            preferences.lastSavedURL = originalURL
+            try? FileManager.default.removeItem(at: folder)
+        }
+        preferences.automaticCopy = false
+        preferences.automaticSave = true
+        preferences.opensEditorAfterCapture = false
+        preferences.saveFolder = folder
+        let controller = AppController(hotKey: HotKey(registersShortcuts: false))
+        controller.showEditor()
+        let window = try XCTUnwrap(NSApp.windows.first { $0.title == "Rimva" && $0.isVisible })
+        defer { window.close() }
+        for _ in 0..<2 {
+            controller.finishCapture(try image())
+            let saved = try XCTUnwrap(preferences.lastSavedURL)
+            XCTAssertNotNil(try ImageExporter.read(saved))
+            XCTAssertNil(controller.session.image)
+            XCTAssertFalse(controller.session.hasUnsavedChanges)
+            XCTAssertFalse(window.isVisible)
+        }
+        controller.finishCapture(try image(), opensEditor: true)
+        XCTAssertNotNil(controller.session.image)
+        XCTAssertTrue(window.isVisible)
+    }
+
+    @MainActor func testLoginLaunchDetectionKeepsManualLaunchDistinct() {
+        XCTAssertFalse(AppController.isLoginLaunch(nil))
+        let event = NSAppleEventDescriptor(eventClass: kCoreEventClass, eventID: kAEOpenApplication,
+                                          targetDescriptor: nil, returnID: AEReturnID(kAutoGenerateReturnID),
+                                          transactionID: AETransactionID(kAnyTransactionID))
+        XCTAssertFalse(AppController.isLoginLaunch(event))
+        event.setParam(NSAppleEventDescriptor(enumCode: keyAELaunchedAsLogInItem), forKeyword: keyAEPropData)
+        XCTAssertTrue(AppController.isLoginLaunch(event))
     }
 
     @MainActor func testToolShortcutsWorkBeforeCanvasFocusAndKeepCommandKeys() async throws {
@@ -226,6 +276,60 @@ final class EditorWorkflowTests: XCTestCase {
             XCTAssertGreaterThan(rect.height, 0)
             XCTAssertTrue(bounds.contains(rect))
         }
+    }
+
+    @MainActor func testWindowSelectionWaitsForCaptureActionAndKeepsClickedTarget() throws {
+        let view = CaptureSelectionView(image: try image(), size: CGSize(width: 320, height: 240),
+                                        windowRects: [CGRect(x: 20, y: 20, width: 100, height: 100),
+                                                      CGRect(x: 150, y: 20, width: 100, height: 100)])
+        view.isWindowMode = true
+        var actions: [Bool] = []
+        view.onConfirm = { actions.append($0) }
+        let click = try XCTUnwrap(NSEvent.mouseEvent(with: .leftMouseDown, location: CGPoint(x: 40, y: 40),
+                                                    modifierFlags: [], timestamp: 0, windowNumber: 0, context: nil,
+                                                    eventNumber: 0, clickCount: 1, pressure: 1))
+        view.mouseDown(with: click)
+        XCTAssertTrue(actions.isEmpty)
+        let selected = view.selectedRect
+        view.updateWindowSelection(at: CGPoint(x: 180, y: 40))
+        XCTAssertEqual(view.selectedRect, selected)
+        let buttons = view.subviews.flatMap(\.subviews).compactMap { $0 as? NSButton }
+        try XCTUnwrap(buttons.first { $0.accessibilityLabel() == L("在编辑器中打开") }).performClick(nil)
+        try XCTUnwrap(buttons.first { $0.title == L("截图") }).performClick(nil)
+        XCTAssertEqual(actions, [true, false])
+    }
+
+    @MainActor func testFullScreenSelectionKeepsWholeImage() throws {
+        let view = CaptureSelectionView(image: try image(), size: CGSize(width: 320, height: 240), windowRects: [])
+        view.isFullScreenMode = true
+        XCTAssertTrue(view.canConfirm)
+        XCTAssertEqual(view.selectedImage()?.width, 640)
+        XCTAssertEqual(view.selectedImage()?.height, 480)
+        let right = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
+                                                windowNumber: 0, context: nil, characters: "", charactersIgnoringModifiers: "",
+                                                isARepeat: false, keyCode: 124))
+        view.keyDown(with: right)
+        XCTAssertEqual(view.selectedRect, view.bounds)
+    }
+
+    @MainActor func testCaptureToolbarAvoidsNotchDockAndScreenEdges() {
+        // Simulate a notched laptop with a visible Dock, including a full-screen target.
+        let safe = CGRect(x: 0, y: 80, width: 1512, height: 864)
+        let size = CGSize(width: 240, height: 76)
+        for selection in [CGRect(x: 0, y: 0, width: 1512, height: 982),
+                          CGRect(x: 0, y: 0, width: 1512, height: 944),
+                          CGRect(x: 0, y: 900, width: 100, height: 82),
+                          CGRect(x: 1450, y: 0, width: 62, height: 40)] {
+            let frame = CaptureSelectionView.toolbarFrame(selection: selection, safeBounds: safe, size: size)
+            XCTAssertTrue(safe.insetBy(dx: 12, dy: 12).contains(frame))
+            if selection.height > 900 { XCTAssertEqual(frame.minY, 92) }
+        }
+        let ordinary = CGRect(x: 500, y: 400, width: 500, height: 300)
+        let below = CaptureSelectionView.toolbarFrame(selection: ordinary, safeBounds: safe, size: size)
+        XCTAssertEqual(below.maxY, ordinary.minY - 10)
+        let low = CGRect(x: 500, y: 90, width: 500, height: 100)
+        let above = CaptureSelectionView.toolbarFrame(selection: low, safeBounds: safe, size: size)
+        XCTAssertEqual(above.minY, low.maxY + 10)
     }
 
     @MainActor func testScrollSelectionRejectsSmallAreaWithoutLosingSelection() async throws {

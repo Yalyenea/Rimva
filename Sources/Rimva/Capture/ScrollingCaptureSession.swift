@@ -8,7 +8,7 @@ import SwiftUI
 /// A live region stays interactive while stable snapshots are stitched off the main thread.
 @MainActor
 final class ScrollingCaptureSession {
-    var onComplete: ((CGImage) -> Void)?
+    var onComplete: ((CGImage, Bool) -> Void)?
     var onCancel: (() -> Void)?
     var onError: ((Error) -> Void)?
     var onReselect: (() -> Void)?
@@ -170,7 +170,7 @@ final class ScrollingCaptureSession {
         }
     }
 
-    private func finish() {
+    private func finish(opensEditor: Bool = false) {
         guard running, !progress.busy else { return }
         let keepAcceptedOnly = progress.phase == .overlap || progress.atLimit
         progress.busy = true
@@ -201,7 +201,7 @@ final class ScrollingCaptureSession {
                 try Task.checkCancellation()
                 guard self.running else { return }
                 self.stop()
-                self.onComplete?(image)
+                self.onComplete?(image, opensEditor)
             } catch is CancellationError {
             } catch {
                 guard self.running else { return }
@@ -241,7 +241,7 @@ final class ScrollingCaptureSession {
         border.orderFrontRegardless()
 
         let visible = screen.visibleFrame
-        let size = NSSize(width: min(540, visible.width - 24), height: 112)
+        let size = NSSize(width: min(660, visible.width - 24), height: 112)
         var origin = NSPoint(x: globalRegion.midX - size.width / 2, y: globalRegion.maxY + 10)
         if origin.y + size.height > visible.maxY { origin.y = globalRegion.minY - size.height - 10 }
         origin.x = max(visible.minX + 8, min(origin.x, visible.maxX - size.width - 8))
@@ -258,7 +258,7 @@ final class ScrollingCaptureSession {
         panel.title = L("长截屏")
         panel.onEscape = { [weak self] in self?.onCancel?() }
         panel.contentView = NSHostingView(rootView: ScrollCaptureToolbar(progress: progress,
-            finish: { [weak self] in self?.finish() }, cancel: { [weak self] in self?.onCancel?() },
+            finish: { [weak self] in self?.finish() }, edit: { [weak self] in self?.finish(opensEditor: true) }, cancel: { [weak self] in self?.onCancel?() },
             reselect: { [weak self] in self?.onReselect?() }).ignoresSafeArea())
         toolbar = panel
         panel.makeKeyAndOrderFront(nil)
@@ -306,6 +306,7 @@ private final class ScrollCaptureProgress: ObservableObject {
 private struct ScrollCaptureToolbar: View {
     @ObservedObject var progress: ScrollCaptureProgress
     var finish: () -> Void
+    var edit: () -> Void
     var cancel: () -> Void
     var reselect: () -> Void
     @ObservedObject private var preferences = Preferences.shared
@@ -341,6 +342,7 @@ private struct ScrollCaptureToolbar: View {
                     .foregroundStyle(Color(nsColor: progress.phase == .overlap ? preferences.palette.warning : preferences.palette.secondary))
                 Button(L("重新框选"), action: reselect).buttonStyle(ThemedActionStyle()).disabled(progress.busy)
                 Button(L("取消"), action: cancel).buttonStyle(ThemedActionStyle()).help("Esc")
+                Button(L("在编辑器中打开"), action: edit).buttonStyle(ThemedActionStyle()).disabled(progress.busy)
                 Button(progress.phase == .overlap ? L("保留已拼部分") : L("完成"), action: finish)
                     .buttonStyle(ThemedActionStyle(prominent: true)).disabled(progress.busy)
             }

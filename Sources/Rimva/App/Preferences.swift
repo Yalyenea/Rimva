@@ -37,6 +37,8 @@ final class Preferences: ObservableObject {
     }
     @Published var automaticCopy: Bool { didSet { storage.set(automaticCopy, forKey: "automaticCopy") } }
     @Published var automaticSave: Bool { didSet { storage.set(automaticSave, forKey: "automaticSave") } }
+    @Published var opensEditorAfterCapture: Bool { didSet { storage.set(opensEditorAfterCapture, forKey: "opensEditorAfterCapture") } }
+    @Published var hidesMenuBarIcon: Bool { didSet { storage.set(hidesMenuBarIcon, forKey: "hidesMenuBarIcon") } }
     @Published var language: AppLanguage {
         didSet {
             storage.set(language.rawValue, forKey: "appLanguage")
@@ -73,6 +75,8 @@ final class Preferences: ObservableObject {
         theme = AppTheme(rawValue: storage.string(forKey: "theme") ?? "rosePine") ?? .rosePine
         automaticCopy = storage.bool(forKey: "automaticCopy")
         automaticSave = storage.bool(forKey: "automaticSave")
+        opensEditorAfterCapture = storage.bool(forKey: "opensEditorAfterCapture")
+        hidesMenuBarIcon = storage.bool(forKey: "hidesMenuBarIcon")
         let path = storage.string(forKey: "saveFolder") ?? NSHomeDirectory() + "/Pictures/Rimva"
         saveFolder = URL(fileURLWithPath: path, isDirectory: true)
         NSApp.appearance = appearance.native
