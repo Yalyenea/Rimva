@@ -18,6 +18,7 @@ Native macOS screenshot app using Swift, AppKit, and Swift Package Manager.
 - Develop with `.tmp/Rimva.app`; install to `/Applications/Rimva.app` with `just install`, then `just launch`. Quit existing instances before running or installing; never use `open -n` or `swift run`.
 - Keep code and file structure simple. Avoid silent fallbacks and unnecessary compatibility layers. Run checks proportional to risk.
 - Store temporary files and builds in `.tmp/`, discarded files in `.tmp/trash/`.
+- 能查看具体代码获取的 bug 等问题就不要问用户
 
 ## Verification and delivery
 

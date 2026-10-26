@@ -32,6 +32,11 @@ final class UIPreviewTests: XCTestCase {
                     view.layoutSubtreeIfNeeded()
                     let toolbar = try XCTUnwrap(view.subviews.first)
                     try saveView(toolbar, to: output.appendingPathComponent("capture-\(theme.rawValue)-\(code)-\(appearance.rawValue).png"))
+                    // Also render the full region toolbar; the window variant has no precision controls.
+                    view.isWindowMode = false
+                    view.needsLayout = true
+                    view.layoutSubtreeIfNeeded()
+                    try saveView(toolbar, to: output.appendingPathComponent("capture-region-\(theme.rawValue)-\(code)-\(appearance.rawValue).png"))
                 }
             }
         }

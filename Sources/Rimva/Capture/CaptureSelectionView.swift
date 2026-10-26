@@ -3,7 +3,7 @@ import RimvaCore
 
 /// Selection geometry uses AppKit points; only the final crop converts to native image pixels.
 @MainActor
-final class CaptureSelectionView: NSView {
+final class CaptureSelectionView: NSView, NSTextFieldDelegate {
     var onActivate: (() -> Void)?
     var onConfirm: ((Bool) -> Void)?
     var onCancel: (() -> Void)?
@@ -32,9 +32,13 @@ final class CaptureSelectionView: NSView {
     private let confirmButton = CaptureActionButton(title: "", target: nil, action: nil)
     private let widthField = NSTextField(string: "")
     private let heightField = NSTextField(string: "")
-    private let ratioPicker = NSPopUpButton(frame: .zero, pullsDown: false)
+    private let ratioButton = CaptureActionButton(title: "", target: nil, action: nil)
+    private let ratioPanel = CaptureToolbarSurface()
+    private var ratioButtons: [CaptureActionButton] = []
+    private var ratioIndex = 0
+    var precisionControlsVisible: Bool { !ratioPanel.isHidden }
     private var pointer: NSPoint?
-    private var selectedRatio: CGFloat? { [nil, CGFloat(1), CGFloat(4) / 3, CGFloat(16) / 9][ratioPicker.indexOfSelectedItem] }
+    private var selectedRatio: CGFloat? { [nil, CGFloat(1), CGFloat(4) / 3, CGFloat(16) / 9][ratioIndex] }
 
     private enum Drag {
         case create, move, resize(Int)
@@ -58,8 +62,7 @@ final class CaptureSelectionView: NSView {
             toolbar.addSubview(button)
         }
         (cancelButton.cell as? CaptureActionCell)?.symbol = "xmark"
-        (cancelButton.cell as? CaptureActionCell)?.showsTitle = false
-        (editorButton.cell as? CaptureActionCell)?.symbol = "square.and.pencil"
+        (editorButton.cell as? CaptureActionCell)?.symbol = "pencil"
         (confirmButton.cell as? CaptureActionCell)?.symbol = "viewfinder"
         cancelButton.action = #selector(cancelSelection)
         editorButton.action = #selector(editSelection)
@@ -68,23 +71,42 @@ final class CaptureSelectionView: NSView {
         confirmButton.isEnabled = false
         for field in [widthField, heightField] {
             field.cell = CaptureDimensionCell(textCell: "")
-            field.font = .monospacedDigitSystemFont(ofSize: 12, weight: .regular)
+            field.font = .monospacedDigitSystemFont(ofSize: 14, weight: .medium)
             field.alignment = .center
+            field.isEditable = true; field.isSelectable = true
             field.isBezeled = false; field.isBordered = false; field.drawsBackground = false
             field.focusRingType = .none
             field.target = self; field.action = #selector(resizeFromFields(_:))
+            field.delegate = self
             field.formatter = {
                 let formatter = NumberFormatter(); formatter.allowsFloats = false; formatter.minimum = 1
                 return formatter
             }()
             toolbar.addSubview(field)
         }
-        ratioPicker.cell = CaptureRatioCell(textCell: "", pullsDown: false)
-        ratioPicker.isBordered = false
-        ratioPicker.focusRingType = .none
-        ratioPicker.target = self; ratioPicker.action = #selector(changeRatio)
-        ratioPicker.font = .systemFont(ofSize: 12)
-        toolbar.addSubview(ratioPicker)
+        for button in [ratioButton] {
+            let cell = CaptureActionCell(textCell: "")
+            button.cell = cell
+            button.setButtonType(.momentaryPushIn)
+            button.isBordered = false; button.focusRingType = .none
+            button.font = .systemFont(ofSize: 12, weight: .medium)
+            button.target = self
+            toolbar.addSubview(button)
+        }
+        (ratioButton.cell as? CaptureActionCell)?.symbol = "rectangle"
+        (ratioButton.cell as? CaptureActionCell)?.showsTitle = false
+        ratioButton.action = #selector(toggleRatio)
+        addSubview(ratioPanel); ratioPanel.isHidden = true
+        for (index, title) in [L("自由"), "1:1", "4:3", "16:9"].enumerated() {
+            let button = CaptureActionButton(title: title, target: self, action: #selector(chooseRatio(_:)))
+            button.cell = CaptureActionCell(textCell: title)
+            button.isBordered = false; button.focusRingType = .none
+            button.font = .systemFont(ofSize: 11)
+            button.target = self; button.action = #selector(chooseRatio(_:))
+            button.tag = index
+            button.frame = NSRect(x: 8 + index * 46, y: 8, width: 42, height: 28)
+            ratioPanel.addSubview(button); ratioButtons.append(button)
+        }
         NotificationCenter.default.addObserver(self, selector: #selector(refreshLabels), name: .rimvaLanguageChanged, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(refreshAppearance), name: .rimvaThemeChanged, object: nil)
         refreshLabels()
@@ -101,13 +123,13 @@ final class CaptureSelectionView: NSView {
         editorButton.isHidden = isScrollingMode
         confirmButton.title = isScrollingMode ? L("开始") : L("截图")
         confirmButton.toolTip = isScrollingMode ? L("按回车开始") : L("按回车截图")
-        let ratio = max(0, ratioPicker.indexOfSelectedItem)
-        ratioPicker.removeAllItems(); ratioPicker.addItems(withTitles: [L("自由"), "1:1", "4:3", "16:9"])
-        ratioPicker.selectItem(at: ratio)
-        widthField.toolTip = L("宽度（像素）"); widthField.setAccessibilityLabel(L("宽度（像素）"))
-        heightField.toolTip = L("高度（像素）"); heightField.setAccessibilityLabel(L("高度（像素）"))
-        ratioPicker.setAccessibilityLabel(L("选区比例"))
-        ratioPicker.toolTip = L("选区比例")
+        ratioButtons.first?.title = L("自由")
+        widthField.setAccessibilityLabel(L("宽度（像素）"))
+        heightField.setAccessibilityLabel(L("高度（像素）"))
+        widthField.toolTip = L("宽度（像素）")
+        heightField.toolTip = L("高度（像素）")
+        ratioButton.setAccessibilityLabel(L("选区比例"))
+        ratioButton.toolTip = L("选区比例")
         setAccessibilityLabel(isScrollingMode ? L("长截屏选区。拖动选择后按回车开始，Escape 取消。") : L("截图选区。拖动选择，空格切换窗口，回车截图，Escape 取消。"))
         needsLayout = true; needsDisplay = true
         toolbar.needsDisplay = true
@@ -115,7 +137,7 @@ final class CaptureSelectionView: NSView {
     @objc private func refreshAppearance() {
         appearance = Preferences.shared.appearance.native
         for field in [widthField, heightField] { field.textColor = Preferences.shared.palette.text }
-        for view in [toolbar, cancelButton, editorButton, confirmButton, widthField, heightField, ratioPicker] { view.needsDisplay = true }
+        for view in [toolbar, cancelButton, editorButton, confirmButton, ratioButton, ratioPanel, widthField, heightField] { view.needsDisplay = true }
         needsDisplay = true
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
@@ -124,28 +146,67 @@ final class CaptureSelectionView: NSView {
     override func layout() {
         super.layout()
         let showPrecision = selection != nil && !isWindowMode && !isFullScreenMode
-        // Keep the launcher's colors and hover treatment, with one compact row for capture actions.
-        let cancelWidth: CGFloat = 28
-        let editorWidth = max(64, ceil(editorButton.attributedTitle.size().width + 38))
-        let confirmWidth = max(80, ceil(confirmButton.attributedTitle.size().width + 38))
-        let editorSpace = isScrollingMode ? 0 : editorWidth + 6
-        let actionsWidth = 16 + cancelWidth + 6 + editorSpace + confirmWidth
-        let width = showPrecision ? max(240, actionsWidth) : actionsWidth
-        let height: CGFloat = showPrecision ? 76 : 44
+        let buttons = isScrollingMode ? [cancelButton, confirmButton] : [editorButton, cancelButton, confirmButton]
+        // Text width + 14-point icon + 5-point gap + symmetric 8-point padding.
+        let actionWidths = buttons.map { ceil($0.attributedTitle.size().width + 35) }
+        let precisionWidth: CGFloat = showPrecision ? 162 : 0
+        let width = 12 + actionWidths.reduce(0, +) + CGFloat(buttons.count - 1) * 6 + precisionWidth
         toolbar.frame = Self.toolbarFrame(selection: selection, safeBounds: toolbarSafeBounds,
-                                          size: NSSize(width: width, height: height))
-        toolbar.showsPrecision = showPrecision
-        toolbar.precisionOrigin = NSPoint(x: (width - 224) / 2, y: 44)
-        for field in [widthField, heightField] { field.isHidden = !showPrecision }
-        ratioPicker.isHidden = !showPrecision
-        let origin = toolbar.precisionOrigin
-        widthField.frame = NSRect(x: origin.x + 6, y: origin.y, width: 48, height: 24)
-        heightField.frame = NSRect(x: origin.x + 72, y: origin.y, width: 48, height: 24)
-        ratioPicker.frame = NSRect(x: origin.x + 156, y: origin.y, width: 56, height: 24)
-        let buttonX = (width - actionsWidth) / 2 + 8
-        cancelButton.frame = NSRect(x: buttonX, y: 8, width: cancelWidth, height: 28)
-        editorButton.frame = NSRect(x: buttonX + cancelWidth + 6, y: 8, width: editorWidth, height: 28)
-        confirmButton.frame = NSRect(x: buttonX + cancelWidth + 6 + editorSpace, y: 8, width: confirmWidth, height: 28)
+                                          size: NSSize(width: width, height: 40))
+        widthField.isHidden = !showPrecision
+        heightField.isHidden = !showPrecision
+        ratioButton.isHidden = !showPrecision
+        toolbar.showsDimensions = showPrecision
+        let precisionX: CGFloat = 6
+        widthField.frame = NSRect(x: precisionX, y: 6, width: 52, height: 28)
+        heightField.frame = NSRect(x: precisionX + 72, y: 6, width: 52, height: 28)
+        ratioButton.frame = NSRect(x: precisionX + 128, y: 6, width: 28, height: 28)
+        toolbar.multiplicationX = precisionX + 56
+        // Keep Cancel beside Capture; precision controls lead the action buttons.
+        var buttonX: CGFloat = 6 + precisionWidth
+        for (index, button) in buttons.enumerated() {
+            button.frame = NSRect(x: buttonX, y: 6, width: actionWidths[index], height: 28)
+            buttonX += actionWidths[index] + 6
+        }
+        if !showPrecision { dismissPrecisionControls() }
+        positionPanel(ratioPanel, size: NSSize(width: 196, height: 44), anchor: ratioButton)
+    }
+
+    private func positionPanel(_ panel: NSView, size: NSSize, anchor: NSView) {
+        let safe = toolbarSafeBounds.insetBy(dx: 12, dy: 12)
+        let below = toolbar.frame.minY - size.height - 6
+        let y = below >= safe.minY ? below : toolbar.frame.maxY + 6
+        let x = toolbar.frame.minX + anchor.frame.minX
+        panel.frame = NSRect(x: min(max(safe.minX, x), safe.maxX - size.width),
+                            y: min(max(safe.minY, y), safe.maxY - size.height), width: size.width, height: size.height)
+    }
+
+    @discardableResult func dismissPrecisionControls() -> Bool {
+        let visible = precisionControlsVisible
+        ratioPanel.isHidden = true
+        if visible { window?.makeFirstResponder(self) }
+        return visible
+    }
+
+    @objc private func toggleRatio() {
+        let show = ratioPanel.isHidden
+        dismissPrecisionControls()
+        ratioPanel.isHidden = !show
+        updateRatioButtons()
+    }
+
+    private func updateRatioButtons() {
+        for button in ratioButtons {
+            (button.cell as? CaptureActionCell)?.selected = button.tag == ratioIndex
+            button.needsDisplay = true
+        }
+    }
+
+    @objc private func chooseRatio(_ sender: NSButton) {
+        ratioIndex = sender.tag
+        if selectedRatio != nil { applyDimensions(widthField) }
+        updateRatioButtons()
+        dismissPrecisionControls()
     }
 
     static func toolbarFrame(selection: NSRect?, safeBounds: NSRect, size: NSSize) -> NSRect {
@@ -213,6 +274,7 @@ final class CaptureSelectionView: NSView {
     override func mouseExited(with event: NSEvent) { pointer = nil; needsDisplay = true }
 
     override func mouseDown(with event: NSEvent) {
+        dismissPrecisionControls()
         onActivate?()
         window?.makeKey()
         window?.makeFirstResponder(self)
@@ -363,6 +425,11 @@ final class CaptureSelectionView: NSView {
     }
 
     @objc private func resizeFromFields(_ sender: Any?) {
+        applyDimensions(sender)
+        dismissPrecisionControls()
+    }
+
+    private func applyDimensions(_ sender: Any?) {
         guard var selection else { return }
         var width = max(1, CGFloat(widthField.integerValue)) * bounds.width / CGFloat(image.width)
         var height = max(1, CGFloat(heightField.integerValue)) * bounds.height / CGFloat(image.height)
@@ -376,10 +443,17 @@ final class CaptureSelectionView: NSView {
         selection.origin.x = min(selection.minX, bounds.maxX - width)
         selection.origin.y = min(selection.minY, bounds.maxY - height)
         self.selection = selection
-        window?.makeFirstResponder(self); refresh()
+        refresh()
     }
 
-    @objc private func changeRatio() { if selectedRatio != nil { resizeFromFields(widthField) } }
+    func controlTextDidBeginEditing(_ notification: Notification) {
+        (notification.object as? NSTextField)?.needsDisplay = true
+    }
+
+    func controlTextDidEndEditing(_ notification: Notification) {
+        (notification.object as? NSTextField)?.needsDisplay = true
+        applyDimensions(notification.object)
+    }
 
     private func drawMagnifier(at point: NSPoint) {
         let scaleX = CGFloat(image.width) / bounds.width, scaleY = CGFloat(image.height) / bounds.height
@@ -438,7 +512,7 @@ final class CaptureSelectionView: NSView {
 private enum CaptureToolbarDrawing {
     static func cell(_ rect: NSRect, pressed: Bool = false, focused: Bool = false) {
         let palette = Preferences.shared.palette
-        let shape = NSBezierPath(roundedRect: rect.insetBy(dx: 0.5, dy: 0.5), xRadius: 4, yRadius: 4)
+        let shape = NSBezierPath(roundedRect: rect.insetBy(dx: 0.5, dy: 0.5), xRadius: 6, yRadius: 6)
         (pressed ? palette.selection : palette.elevated).setFill(); shape.fill()
         (focused ? palette.accent : palette.separator).setStroke()
         shape.lineWidth = focused ? 1 : 0.5; shape.stroke()
@@ -458,25 +532,20 @@ private enum CaptureToolbarDrawing {
 
 @MainActor
 private final class CaptureToolbarSurface: NSView {
-    var precisionOrigin = NSPoint.zero { didSet { needsDisplay = true } }
-    var showsPrecision = false { didSet { if oldValue != showsPrecision { needsDisplay = true } } }
-
+    var multiplicationX: CGFloat = 0 { didSet { if oldValue != multiplicationX { needsDisplay = true } } }
+    var showsDimensions = false { didSet { if oldValue != showsDimensions { needsDisplay = true } } }
     override func draw(_ dirtyRect: NSRect) {
         let palette = Preferences.shared.palette
         let shape = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5), xRadius: 9, yRadius: 9)
         // Use exactly the launcher's theme colors; screenshots and mockups can carry different color profiles.
         palette.background.setFill(); shape.fill()
         palette.separator.setStroke(); shape.lineWidth = 0.5; shape.stroke()
-        guard showsPrecision else { return }
-        let origin = precisionOrigin
-        CaptureToolbarDrawing.label("×", in: NSRect(x: origin.x + 58, y: origin.y, width: 10, height: 24), color: palette.secondary)
-        CaptureToolbarDrawing.label("px", in: NSRect(x: origin.x + 126, y: origin.y, width: 14, height: 24),
-                                    font: .systemFont(ofSize: 10), color: palette.secondary)
-        palette.separator.setStroke()
-        let divider = NSBezierPath()
-        divider.move(to: NSPoint(x: origin.x + 148, y: origin.y + 5))
-        divider.line(to: NSPoint(x: origin.x + 148, y: origin.y + 19))
-        divider.lineWidth = 0.5; divider.stroke()
+        if showsDimensions {
+            // Use the mathematical multiplication glyph, centered in the same 28-point control row.
+            CaptureToolbarDrawing.label("×", in: NSRect(x: multiplicationX, y: 6, width: 12, height: 28),
+                                        font: .systemFont(ofSize: 17, weight: .regular), color: palette.secondary)
+        }
+
     }
 
     override func resetCursorRects() { addCursorRect(bounds, cursor: .arrow) }
@@ -507,6 +576,7 @@ private final class CaptureActionCell: NSButtonCell {
     var symbol = ""
     var showsTitle = true
     var hovered = false
+    var selected = false
 
     override func draw(withFrame cellFrame: NSRect, in controlView: NSView) {
         drawInterior(withFrame: cellFrame, in: controlView)
@@ -515,31 +585,66 @@ private final class CaptureActionCell: NSButtonCell {
     override func drawInterior(withFrame rect: NSRect, in controlView: NSView) {
         let palette = Preferences.shared.palette
         let focused = controlView.window?.firstResponder === controlView
-        let active = isEnabled && (hovered || isHighlighted || focused)
+        let active = isEnabled && (hovered || isHighlighted || focused || selected)
         let shape = NSBezierPath(roundedRect: rect.insetBy(dx: 0.25, dy: 0.25), xRadius: 6, yRadius: 6)
         (active ? palette.selection : palette.elevated).setFill(); shape.fill()
         (active ? palette.accent : palette.separator).setStroke(); shape.lineWidth = 0.5; shape.stroke()
         let foreground = isEnabled ? palette.text : palette.secondary.withAlphaComponent(0.5)
-        let iconSize: CGFloat = showsTitle ? 14 : 12
-        let configuration = NSImage.SymbolConfiguration(pointSize: iconSize, weight: .regular)
-            .applying(.init(paletteColors: [foreground]))
-        let iconX = showsTitle ? rect.minX + 8 : rect.midX - iconSize / 2
-        NSImage(systemSymbolName: symbol, accessibilityDescription: nil)?
-            .withSymbolConfiguration(configuration)?.draw(in: NSRect(x: iconX, y: rect.midY - iconSize / 2,
-                                                                      width: iconSize, height: iconSize))
-        guard showsTitle else { return }
-        let attributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: 12, weight: .medium), .foregroundColor: foreground
-        ]
-        let textHeight = (title as NSString).size(withAttributes: attributes).height
-        (title as NSString).draw(at: NSPoint(x: rect.minX + 28, y: rect.midY - textHeight / 2), withAttributes: attributes)
+        let labelFont = font ?? .systemFont(ofSize: 12, weight: .medium)
+        let attributes: [NSAttributedString.Key: Any] = [.font: labelFont, .foregroundColor: foreground]
+        let textSize = showsTitle ? (title as NSString).size(withAttributes: attributes) : .zero
+        let iconSize: CGFloat = 14
+        let hasIcon = !symbol.isEmpty
+        let groupWidth = textSize.width + (hasIcon ? iconSize + (showsTitle ? 5 : 0) : 0)
+        let startX = rect.midX - groupWidth / 2
+        if hasIcon {
+            drawSymbol(at: NSPoint(x: startX, y: rect.midY - iconSize / 2), color: foreground, flipped: controlView.isFlipped)
+        }
+        if showsTitle {
+            (title as NSString).draw(at: NSPoint(x: startX + (hasIcon ? iconSize + 5 : 0), y: rect.midY - textSize.height / 2), withAttributes: attributes)
+        }
     }
+
+    private func drawSymbol(at origin: NSPoint, color: NSColor, flipped: Bool) {
+        // A shared 14-point grid and stroke avoids SF Symbols' differing optical insets.
+        NSGraphicsContext.saveGraphicsState()
+        defer { NSGraphicsContext.restoreGraphicsState() }
+        let transform = NSAffineTransform()
+        transform.translateX(by: origin.x, yBy: origin.y + (flipped ? 14 : 0))
+        if flipped { transform.scaleX(by: 1, yBy: -1) }
+        transform.concat()
+        let path = NSBezierPath()
+        path.lineWidth = 1.25; path.lineCapStyle = .round; path.lineJoinStyle = .round
+        switch symbol {
+        case "xmark":
+            path.move(to: NSPoint(x: 1, y: 1)); path.line(to: NSPoint(x: 13, y: 13))
+            path.move(to: NSPoint(x: 1, y: 13)); path.line(to: NSPoint(x: 13, y: 1))
+        case "pencil":
+            path.move(to: NSPoint(x: 1, y: 1))
+            for point in [NSPoint(x: 2, y: 5), NSPoint(x: 10, y: 13), NSPoint(x: 13, y: 10), NSPoint(x: 5, y: 2)] {
+                path.line(to: point)
+            }
+            path.close()
+            path.move(to: NSPoint(x: 8, y: 11)); path.line(to: NSPoint(x: 11, y: 8))
+        case "viewfinder":
+            for (x, y, dx, dy) in [(1.0, 1.0, 1.0, 1.0), (13.0, 1.0, -1.0, 1.0),
+                                    (13.0, 13.0, -1.0, -1.0), (1.0, 13.0, 1.0, -1.0)] {
+                path.move(to: NSPoint(x: x, y: y + 3 * dy))
+                path.line(to: NSPoint(x: x, y: y)); path.line(to: NSPoint(x: x + 3 * dx, y: y))
+            }
+        case "rectangle":
+            path.appendRoundedRect(NSRect(x: 1, y: 3, width: 12, height: 8), xRadius: 1, yRadius: 1)
+        default: return
+        }
+        color.setStroke(); path.stroke()
+    }
+
 }
 
 @MainActor
 private final class CaptureDimensionCell: NSTextFieldCell {
     override func drawingRect(forBounds rect: NSRect) -> NSRect {
-        let textSize = ("0" as NSString).size(withAttributes: [.font: NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .regular)])
+        let textSize = ("0" as NSString).size(withAttributes: [.font: font ?? NSFont.monospacedDigitSystemFont(ofSize: 14, weight: .medium)])
         let height = min(rect.height, ceil(textSize.height))
         return NSRect(x: rect.minX + 4, y: rect.midY - height / 2, width: max(0, rect.width - 8), height: height)
     }
@@ -547,24 +652,11 @@ private final class CaptureDimensionCell: NSTextFieldCell {
     override func draw(withFrame cellFrame: NSRect, in controlView: NSView) {
         let editing = (controlView as? NSTextField)?.currentEditor() != nil
         CaptureToolbarDrawing.cell(cellFrame, focused: editing)
-        super.draw(withFrame: cellFrame, in: controlView)
-    }
-}
-
-@MainActor
-private final class CaptureRatioCell: NSPopUpButtonCell {
-    override func draw(withFrame cellFrame: NSRect, in controlView: NSView) {
-        drawInterior(withFrame: cellFrame, in: controlView)
-    }
-
-    override func drawInterior(withFrame cellFrame: NSRect, in controlView: NSView) {
-        CaptureToolbarDrawing.cell(cellFrame, pressed: isHighlighted, focused: controlView.window?.firstResponder === controlView)
-        CaptureToolbarDrawing.label(title, in: NSRect(x: cellFrame.minX + 5, y: cellFrame.minY, width: 30, height: cellFrame.height))
-        let direction: CGFloat = controlView.isFlipped ? 1 : -1
-        let arrow = NSBezierPath()
-        arrow.move(to: NSPoint(x: cellFrame.maxX - 15, y: cellFrame.midY - direction * 1.5))
-        arrow.line(to: NSPoint(x: cellFrame.maxX - 12, y: cellFrame.midY + direction * 1.5))
-        arrow.line(to: NSPoint(x: cellFrame.maxX - 9, y: cellFrame.midY - direction * 1.5))
-        Preferences.shared.palette.secondary.setStroke(); arrow.lineWidth = 1; arrow.stroke()
+        if editing {
+            super.draw(withFrame: cellFrame, in: controlView)
+        } else {
+            CaptureToolbarDrawing.label(stringValue, in: cellFrame,
+                                        font: font ?? .monospacedDigitSystemFont(ofSize: 12, weight: .regular))
+        }
     }
 }

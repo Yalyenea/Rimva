@@ -138,6 +138,7 @@ final class CaptureCoordinator {
             }
             view.onCancel = { [weak self] in self?.cancel() }
             let panel = CapturePanel(contentRect: screen.frame, styleMask: .borderless, backing: .buffered, defer: false)
+            panel.onCancel = { [weak self] in self?.cancel() }
             panel.isReleasedWhenClosed = false
             panel.level = .screenSaver
             panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
@@ -152,10 +153,9 @@ final class CaptureCoordinator {
         }
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self else { return event }
-            // Numeric selection fields keep their editing keys, including Return and Space.
-            if event.window?.firstResponder is NSTextView, event.keyCode != 53 { return event }
+            // Text fields keep their editing keys; the capture panel owns Escape.
+            if event.window?.firstResponder is NSTextView { return event }
             switch event.keyCode {
-            case 53: self.cancel(); return nil
             case 36, 76:
                 if self.activeView?.canConfirm == true { self.activeView?.onConfirm?(false) }
                 else { NSSound.beep() }
@@ -252,7 +252,19 @@ private enum CaptureFailure: LocalizedError {
 }
 
 @MainActor
-private final class CapturePanel: NSPanel {
+final class CapturePanel: NSPanel {
+    var onCancel: (() -> Void)?
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { true }
+
+    override func sendEvent(_ event: NSEvent) {
+        // Handle Escape before the focused control, including the dimensions field editor.
+        if event.type == .keyDown, event.keyCode == 53 {
+            cancelOperation(nil)
+            return
+        }
+        super.sendEvent(event)
+    }
+
+    override func cancelOperation(_ sender: Any?) { onCancel?() }
 }

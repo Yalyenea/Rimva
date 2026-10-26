@@ -299,6 +299,45 @@ final class EditorWorkflowTests: XCTestCase {
         XCTAssertEqual(actions, [true, false])
     }
 
+    @MainActor func testCapturePanelEscapeCancelsWithSelectionButtonAndDimensionFocus() throws {
+        let view = CaptureSelectionView(image: try image(), size: CGSize(width: 640, height: 480),
+                                        windowRects: [CGRect(x: 20, y: 20, width: 200, height: 160)])
+        view.isWindowMode = true
+        view.updateWindowSelection(at: CGPoint(x: 40, y: 40))
+        view.isWindowMode = false
+        let panel = CapturePanel(contentRect: view.bounds, styleMask: .borderless, backing: .buffered, defer: false)
+        panel.isReleasedWhenClosed = false
+        panel.contentView = view
+        defer { panel.close() }
+        view.layoutSubtreeIfNeeded()
+        let toolbar = try XCTUnwrap(view.subviews.first)
+        let cancel = try XCTUnwrap(toolbar.subviews.compactMap { $0 as? NSButton }.first { $0.title == L("取消") })
+        let width = try XCTUnwrap(toolbar.subviews.compactMap { $0 as? NSTextField }.first)
+        let ratio = try XCTUnwrap(toolbar.subviews.compactMap { $0 as? NSButton }
+            .first { $0.accessibilityLabel() == L("选区比例") })
+        let escape = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
+                                                  windowNumber: panel.windowNumber, context: nil,
+                                                  characters: "\u{1b}", charactersIgnoringModifiers: "\u{1b}",
+                                                  isARepeat: false, keyCode: 53))
+        var cancellations = 0
+        panel.onCancel = { cancellations += 1 }
+        view.onCancel = { cancellations += 1 }
+        for responder in [nil, view, cancel, width] as [NSResponder?] {
+            XCTAssertTrue(panel.makeFirstResponder(responder))
+            if responder === width { XCTAssertTrue(panel.firstResponder is NSTextView) }
+            let previous = cancellations
+            panel.sendEvent(escape)
+            XCTAssertEqual(cancellations, previous + 1, "Escape must cancel regardless of the focused control")
+        }
+        ratio.performClick(nil)
+        XCTAssertTrue(view.precisionControlsVisible)
+        let previous = cancellations
+        panel.sendEvent(escape)
+        XCTAssertEqual(cancellations, previous + 1, "An open ratio panel must not consume Escape")
+        cancel.performClick(nil)
+        XCTAssertEqual(cancellations, previous + 2, "Cancel and Escape must use the same cancellation callback")
+    }
+
     @MainActor func testFullScreenSelectionKeepsWholeImage() throws {
         let view = CaptureSelectionView(image: try image(), size: CGSize(width: 320, height: 240), windowRects: [])
         view.isFullScreenMode = true
@@ -351,6 +390,36 @@ final class EditorWorkflowTests: XCTestCase {
                                                 windowNumber: 0, context: nil, characters: "", charactersIgnoringModifiers: "", isARepeat: false, keyCode: 124))
         view.keyDown(with: right)
         XCTAssertEqual(try XCTUnwrap(view.selectedRect).minX - before.minX, 0.5, accuracy: 0.001)
+    }
+
+    @MainActor func testInlineDimensionsRemainEditableAndApplyPixelSizeAndRatio() throws {
+        let view = CaptureSelectionView(image: try image(), size: CGSize(width: 320, height: 240),
+                                        windowRects: [CGRect(x: 20, y: 20, width: 100, height: 100)])
+        view.isWindowMode = true
+        view.updateWindowSelection(at: CGPoint(x: 40, y: 40))
+        view.isWindowMode = false
+        view.layoutSubtreeIfNeeded()
+        let toolbar = try XCTUnwrap(view.subviews.first)
+        XCTAssertEqual(toolbar.frame.height, 40)
+        let ratioControl = try XCTUnwrap(toolbar.subviews.compactMap { $0 as? NSButton }
+            .first { $0.accessibilityLabel() == L("选区比例") })
+        ratioControl.performClick(nil)
+        XCTAssertTrue(view.precisionControlsVisible)
+        XCTAssertTrue(view.dismissPrecisionControls())
+        XCTAssertFalse(view.dismissPrecisionControls())
+        XCTAssertTrue(view.canConfirm)
+        let fields = view.subviews.flatMap(\.subviews).compactMap { $0 as? NSTextField }
+        let width = try XCTUnwrap(fields.first { $0.accessibilityLabel() == L("宽度（像素）") })
+        let height = try XCTUnwrap(fields.first { $0.accessibilityLabel() == L("高度（像素）") })
+        XCTAssertTrue(width.isEditable && height.isEditable)
+        width.integerValue = 180; height.integerValue = 120
+        width.sendAction(width.action, to: width.target)
+        XCTAssertEqual(view.selectedImage()?.width, 180)
+        XCTAssertEqual(view.selectedImage()?.height, 120)
+        let ratio = try XCTUnwrap(view.subviews.flatMap(\.subviews).compactMap { $0 as? NSButton }.first { $0.title == "1:1" })
+        XCTAssertTrue(ratio.sendAction(ratio.action, to: ratio.target))
+        XCTAssertEqual(view.selectedImage()?.width, 180)
+        XCTAssertEqual(view.selectedImage()?.height, 180)
     }
 
     func testExportUpdatesTheChosenFile() throws {
