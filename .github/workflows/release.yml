@@ -66,7 +66,8 @@ jobs:
           VERSION: ${{ steps.version.outputs.value }}
         run: |
           codesign --verify --deep --strict .tmp/Rimva.app
-          lipo -verify_arch arm64 x86_64 .tmp/Rimva.app/Contents/MacOS/Rimva
+          lipo .tmp/Rimva.app/Contents/MacOS/Rimva -verify_arch arm64
+          lipo .tmp/Rimva.app/Contents/MacOS/Rimva -verify_arch x86_64
           mkdir -p .tmp/release
           ditto -c -k --sequesterRsrc --keepParent .tmp/Rimva.app ".tmp/release/Rimva-$VERSION-universal.zip"
           cd .tmp/release
@@ -103,7 +104,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           RUN_ID: ${{ github.run_id }}
-        run: gh run download "$RUN_ID" --dir .tmp/release
+          TAG: ${{ github.ref_name }}
+        run: gh run download "$RUN_ID" --name "Rimva-${TAG#v}-universal" --dir .tmp/release
 
       - name: Create release
         env:
@@ -111,5 +113,5 @@ jobs:
           GH_REPO: ${{ github.repository }}
           TAG: ${{ github.ref_name }}
         run: |
-          gh release create "$TAG" .tmp/release/*/*.zip .tmp/release/*/SHA256SUMS \
+          gh release create "$TAG" .tmp/release/*.zip .tmp/release/SHA256SUMS \
             --verify-tag --title "Rimva $TAG" --notes-file .github/release-notes.md
