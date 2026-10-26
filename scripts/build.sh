@@ -26,9 +26,10 @@ mkdir -p "$app_path/Contents/MacOS"
 mkdir -p "$app_path/Contents/Resources"
 cp "$binary_dir/Rimva" "$app_path/Contents/MacOS/Rimva"
 cp -R "$binary_dir/Rimva_RimvaCore.bundle" "$app_path/Contents/Resources/"
-xcrun actool Sources/AppIcon.icon --compile "$app_path/Contents/Resources" \
+# Xcode's shared icon compiler can retain another project's working directory.
+xcrun actool "$PWD/Sources/AppIcon.icon" --compile "$app_path/Contents/Resources" \
     --app-icon AppIcon --include-all-app-icons --platform macosx --target-device mac \
-    --minimum-deployment-target 14.0 --output-partial-info-plist .tmp/swift-build/AppIcon-partial.plist \
+    --minimum-deployment-target 14.0 --output-partial-info-plist "$PWD/.tmp/swift-build/AppIcon-partial.plist" \
     --output-format human-readable-text --errors --warnings
 for language in en zh-Hans; do
     mkdir -p "$app_path/Contents/Resources/$language.lproj"
