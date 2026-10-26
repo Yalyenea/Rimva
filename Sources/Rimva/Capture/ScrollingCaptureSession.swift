@@ -353,6 +353,8 @@ private struct ScrollCaptureToolbar: View {
         .background(Color(nsColor: preferences.palette.background), in: RoundedRectangle(cornerRadius: 8))
         .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color(nsColor: preferences.palette.separator), lineWidth: 0.5))
         .environment(\.locale, L10n.locale)
+        .background(InitialFocusReset())
+        .focusEffectDisabled()
     }
 
     private var status: String {

@@ -4,6 +4,7 @@ import CoreGraphics
 public enum ImageRenderingError: LocalizedError {
     case invalidCrop
     case invalidStyle
+    case invalidOpacity
     case invalidAnnotation
     case invalidColor(String)
     case imageTooLarge
@@ -15,6 +16,7 @@ public enum ImageRenderingError: LocalizedError {
         switch self {
         case .invalidCrop: L("裁剪范围无效，请重新选择。")
         case .invalidStyle: L("留白或圆角数值无效。")
+        case .invalidOpacity: L("截图不透明度须在 0–100% 之间。")
         case .invalidAnnotation: L("标注的位置或尺寸无效。")
         case .invalidColor(let value): L("无法识别颜色 %@，请重新选择。", value)
         case .imageTooLarge: L("图片尺寸过大，请缩小裁剪范围或留白。")
@@ -108,6 +110,14 @@ public enum ImageRenderer {
         context.interpolationQuality = .high
 
         if style.enabled {
+            // Clip the complete composition so the outer corners stay transparent
+            // for backgrounds, shadows and screenshot content alike.
+            let radius = min(CGFloat(style.backgroundRadius), min(layout.size.width, layout.size.height) / 2)
+            if radius > 0 {
+                context.addPath(CGPath(roundedRect: CGRect(origin: .zero, size: layout.size),
+                                       cornerWidth: radius, cornerHeight: radius, transform: nil))
+                context.clip()
+            }
             try drawBackground(style, appearance: appearance, size: layout.size, in: context)
         }
 
@@ -137,6 +147,17 @@ public enum ImageRenderer {
         }
 
         context.saveGState()
+        let translucent = style.contentOpacity < 1
+        if translucent {
+            // Composite the screenshot and annotations once, so overlapping marks
+            // share the same opacity and redactions cannot reveal source pixels.
+            context.setAlpha(CGFloat(style.contentOpacity))
+            context.beginTransparencyLayer(in: layout.content, auxiliaryInfo: nil)
+        }
+        defer {
+            if translucent { context.endTransparencyLayer() }
+            context.restoreGState()
+        }
         context.addPath(outline)
         context.clip()
         context.translateBy(x: layout.content.minX - layout.crop.minX, y: layout.content.minY - layout.crop.minY)
@@ -154,11 +175,12 @@ public enum ImageRenderer {
                 try draw(annotation, in: context)
             }
         }
-        context.restoreGState()
-
     }
 
     private static func layout(image: CGImage, state: EditState, style: BackgroundStyle) throws -> Layout {
+        guard style.contentOpacity.isFinite, (0...1).contains(style.contentOpacity) else {
+            throw ImageRenderingError.invalidOpacity
+        }
         let bounds = CGRect(x: 0, y: 0, width: image.width, height: image.height)
         var crop = bounds
         if let requested = state.crop {
@@ -174,6 +196,7 @@ public enum ImageRenderer {
         }
         if style.enabled {
             guard style.padding.isFinite, style.padding >= 0 else { throw ImageRenderingError.invalidStyle }
+            guard style.backgroundRadius.isFinite, style.backgroundRadius >= 0 else { throw ImageRenderingError.invalidStyle }
             padding = ceil(CGFloat(style.padding))
             // Padding is the requested inset. Shadows clip to that canvas rather
             // than imposing a hidden minimum on the slider and exported dimensions.

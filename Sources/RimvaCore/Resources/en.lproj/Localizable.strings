@@ -40,6 +40,8 @@
 "无法解码这张图片。" = "Couldn't decode this image.";
 "裁剪范围无效，请重新选择。" = "Choose a valid crop area.";
 "留白或圆角数值无效。" = "Padding or corner radius is out of range.";
+"截图不透明度须在 0–100% 之间。" = "Set screenshot opacity between 0 and 100%.";
+"截图不透明度" = "Screenshot opacity";
 "标注的位置或尺寸无效。" = "The annotation position or size is out of range.";
 "无法识别颜色 %@，请重新选择。" = "Couldn't read the color %@. Choose another.";
 "图片尺寸过大，请缩小裁剪范围或留白。" = "The image is too large. Reduce the crop area or padding.";
@@ -70,6 +72,8 @@
 "自动背景" = "Add background";
 "留白间距" = "Padding";
 "圆角半径" = "Corner radius";
+"截图圆角" = "Image corners";
+"背景圆角" = "Background corners";
 "投射阴影" = "Shadow";
 "应用于新截图和导入图片，可在编辑器中调整。" = "Applies to new captures and imports. Adjust each image in the editor.";
 "保存位置" = "Save folder";

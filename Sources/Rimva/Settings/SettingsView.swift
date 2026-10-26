@@ -44,6 +44,8 @@ struct SettingsView: View {
         .environment(\.locale, L10n.locale)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .ignoresSafeArea()
+        .background(InitialFocusReset())
+        .focusEffectDisabled()
         .onAppear {
             preferences.refreshSystemStatus()
             previewAppearance = preferences.renderAppearance

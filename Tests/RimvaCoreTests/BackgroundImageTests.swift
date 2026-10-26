@@ -39,7 +39,7 @@ final class BackgroundImageTests: XCTestCase {
     }
 
     func testImageStyleRoundTrip() throws {
-        let original = BackgroundStyle(source: .image, lightImagePath: "/day.heic", darkImagePath: "/night.heic", followsAppearance: false)
+        let original = BackgroundStyle(backgroundRadius: 24, contentOpacity: 0.75, source: .image, lightImagePath: "/day.heic", darkImagePath: "/night.heic", followsAppearance: false)
         let restored = try JSONDecoder().decode(BackgroundStyle.self, from: JSONEncoder().encode(original))
         XCTAssertEqual(restored, original)
     }

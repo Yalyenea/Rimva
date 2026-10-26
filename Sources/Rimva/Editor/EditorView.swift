@@ -1,4 +1,5 @@
 import AppKit
+import Carbon
 import SwiftUI
 import RimvaCore
 import UniformTypeIdentifiers
@@ -16,8 +17,12 @@ final class EditorWindow: NSWindow {
         // Text entry and modified menu commands keep their normal event handling.
         guard event.type == .keyDown, let session, session.image != nil, !session.historyShown,
               attachedSheet == nil, !(firstResponder is NSTextView),
-              event.modifierFlags.intersection([.command, .control, .option]).isEmpty,
-              let key = event.charactersIgnoringModifiers?.lowercased() else {
+              event.modifierFlags.intersection([.command, .control, .option]).isEmpty else {
+            super.sendEvent(event)
+            return
+        }
+        if adjustStyle(with: event, session: session) { return }
+        guard let key = event.charactersIgnoringModifiers?.lowercased() else {
             super.sendEvent(event)
             return
         }
@@ -30,7 +35,26 @@ final class EditorWindow: NSWindow {
         }
     }
 
-
+    private func adjustStyle(with event: NSEvent, session: EditorSession) -> Bool {
+        guard event.modifierFlags.contains(.shift) else { return false }
+        // Physical key codes also recognize Shift-minus, which types an underscore.
+        switch Int(event.keyCode) {
+        case kVK_UpArrow, kVK_DownArrow:
+            guard session.style.enabled else { return true }
+            let padding = session.style.padding
+            // Move toward the next preset without rounding or changing existing saved values on load.
+            let next = Int(event.keyCode) == kVK_UpArrow
+                ? RimvaCore.BackgroundStyle.paddingPresets.first { $0 > padding }
+                : RimvaCore.BackgroundStyle.paddingPresets.last { $0 < padding }
+            if let next { session.changeStyle { $0.padding = next } }
+        case kVK_ANSI_Equal, kVK_ANSI_KeypadPlus, kVK_ANSI_Minus, kVK_ANSI_KeypadMinus:
+            guard session.style.rounded else { return true }
+            let increases = [kVK_ANSI_Equal, kVK_ANSI_KeypadPlus].contains(Int(event.keyCode))
+            session.changeStyle { $0.radius = min(40, max(0, $0.radius + (increases ? 1 : -1))) }
+        default: return false
+        }
+        return true
+    }
 }
 
 extension Color {
@@ -199,6 +223,8 @@ struct EditorView: View {
             }
         }
         .background(Color.rimvaSurface)
+        .background(InitialFocusReset())
+        .focusEffectDisabled()
         .foregroundStyle(Color(nsColor: preferences.palette.text))
         .tint(Color(nsColor: preferences.palette.accentText))
         .ignoresSafeArea()
@@ -327,6 +353,8 @@ struct BackgroundPopover: View {
         .foregroundStyle(Color(nsColor: preferences.palette.text))
         .background(Color(nsColor: preferences.palette.background))
         .environment(\.locale, L10n.locale)
+        .background(InitialFocusReset())
+        .focusEffectDisabled()
     }
 }
 

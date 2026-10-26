@@ -2,6 +2,33 @@ import AppKit
 import RimvaCore
 import SwiftUI
 
+/// Clear SwiftUI's initial control focus after mounting, including popover windows.
+/// Updates leave user-selected responders alone so text entry and Tab still work.
+struct InitialFocusReset: NSViewRepresentable {
+    func makeNSView(context: Context) -> ResetView {
+        let view = ResetView()
+        view.setAccessibilityElement(false)
+        return view
+    }
+
+    func updateNSView(_ view: ResetView, context: Context) {}
+
+    final class ResetView: NSView {
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            guard let window else { return }
+            // SwiftUI chooses its initial focus while the hosting view is mounted.
+            DispatchQueue.main.async { [weak self, weak window] in
+                guard let self, let window, self.window === window,
+                      !(window.firstResponder is NSTextView) else { return }
+                window.makeFirstResponder(nil)
+            }
+        }
+    }
+}
+
 // Draw the control surfaces explicitly: macOS's standard bezels otherwise mix
 // system gradients and white fills into the selected app palette.
 struct ThemedSegments<Value: Hashable, Content: View>: View {
@@ -108,6 +135,7 @@ struct ThemedSlider: NSViewRepresentable {
     var title: String
     @Binding var value: Double
     var range: ClosedRange<Double>
+    var tickCount = 0
     var onEditingChanged: (Bool) -> Void = { _ in }
     @ObservedObject private var preferences = Preferences.shared
     @Environment(\.isEnabled) private var isEnabled
@@ -119,6 +147,7 @@ struct ThemedSlider: NSViewRepresentable {
         slider.cell = ThemeSliderCell()
         slider.isContinuous = true
         slider.sliderType = .linear
+        slider.focusRingType = .none
         slider.target = context.coordinator
         slider.action = #selector(Coordinator.changed(_:))
         slider.setContentHuggingPriority(.defaultLow, for: .horizontal)
@@ -129,6 +158,9 @@ struct ThemedSlider: NSViewRepresentable {
         context.coordinator.parent = self
         slider.minValue = range.lowerBound
         slider.maxValue = range.upperBound
+        slider.numberOfTickMarks = tickCount
+        // Ticks are reference points; dragging still accepts every pixel value.
+        slider.allowsTickMarkValuesOnly = false
         slider.doubleValue = value
         slider.isEnabled = isEnabled
         slider.onEditingChanged = onEditingChanged
@@ -163,6 +195,16 @@ final class ThemeSliderControl: NSSlider {
 
 final class ThemeSliderCell: NSSliderCell {
     var palette = Preferences.shared.palette
+
+    override func drawTickMarks() {
+        palette.secondary.withAlphaComponent(isEnabled ? 0.65 : 0.25).setFill()
+        for index in 0..<numberOfTickMarks {
+            let tick = rectOfTickMark(at: index)
+            // Small dots echo the round thumb without competing with its current position.
+            let dot = NSRect(x: tick.midX - 1.5, y: tick.midY - 1.5, width: 3, height: 3)
+            NSBezierPath(ovalIn: dot).fill()
+        }
+    }
 
     override func drawBar(inside rect: NSRect, flipped: Bool) {
         let bar = NSRect(x: rect.minX, y: rect.midY - 2, width: rect.width, height: 4)

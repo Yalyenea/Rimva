@@ -24,15 +24,41 @@ struct BackgroundStyleControls: View {
                         Text("\(Int(style.padding)) px").monospacedDigit()
                             .foregroundStyle(Color(nsColor: preferences.palette.secondary))
                     }.frame(height: 26)
-                    ThemedSlider(title: L("留白"), value: $style.padding, range: 0...160, onEditingChanged: onEditingChanged)
+                    ThemedSlider(title: L("留白"), value: $style.padding, range: 0...160,
+                                 tickCount: RimvaCore.BackgroundStyle.paddingPresets.count, onEditingChanged: onEditingChanged)
                         .frame(height: 20)
+                        .help(compact ? L("%@（%@）", L("留白"), "⇧↑ / ⇧↓") : L("留白"))
                 }.frame(maxWidth: .infinity).disabled(!style.enabled)
                 VStack(spacing: 4) {
-                    toggleRow(L("圆角半径"), isOn: $style.rounded)
-                    ThemedSlider(title: L("圆角半径"), value: $style.radius, range: 0...40, onEditingChanged: onEditingChanged)
+                    toggleRow(L("截图圆角"), isOn: $style.rounded)
+                    ThemedSlider(title: L("截图圆角"), value: $style.radius, range: 0...40, onEditingChanged: onEditingChanged)
                         .frame(height: 20).disabled(!style.rounded)
-                        .help("\(Int(style.radius)) px")
+                        .help(compact ? L("%@（%@）", "\(Int(style.radius)) px", "⇧+ / ⇧−") : "\(Int(style.radius)) px")
                 }.frame(maxWidth: .infinity)
+            }
+            VStack(spacing: 4) {
+                HStack {
+                    Text(L("背景圆角"))
+                    Spacer(minLength: 4)
+                    Text("\(Int(style.backgroundRadius)) px").monospacedDigit()
+                        .foregroundStyle(Color(nsColor: preferences.palette.secondary))
+                }.frame(height: 26)
+                ThemedSlider(title: L("背景圆角"), value: $style.backgroundRadius, range: 0...80,
+                             onEditingChanged: onEditingChanged)
+                    .frame(height: 20)
+            }.disabled(!style.enabled)
+            VStack(spacing: 4) {
+                HStack {
+                    Text(L("截图不透明度"))
+                    Spacer(minLength: 4)
+                    Text("\(Int((style.contentOpacity * 100).rounded()))%")
+                        .monospacedDigit().foregroundStyle(Color(nsColor: preferences.palette.secondary))
+                }.frame(height: 26)
+                ThemedSlider(title: L("截图不透明度"), value: Binding(
+                    get: { style.contentOpacity * 100 },
+                    set: { style.contentOpacity = $0 / 100 }
+                ), range: 0...100, onEditingChanged: onEditingChanged)
+                    .frame(height: 20)
             }
             HStack {
                 Text(L("阴影"))

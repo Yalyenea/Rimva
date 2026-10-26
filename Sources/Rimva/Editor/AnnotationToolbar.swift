@@ -168,7 +168,7 @@ struct CompactColorWell: NSViewRepresentable {
             button.imagePosition = .imageOnly
             button.image = NSImage(systemSymbolName: "paintpalette", accessibilityDescription: nil)
             button.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 13, weight: .regular)
-            button.focusRingType = .exterior
+            button.focusRingType = .none
             button.target = self
             button.action = #selector(openColorPanel(_:))
             addSubview(button)

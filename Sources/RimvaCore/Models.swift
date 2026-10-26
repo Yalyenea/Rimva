@@ -64,13 +64,17 @@ public enum BackgroundSource: String, Codable, CaseIterable {
 }
 
 public struct BackgroundStyle: Equatable, Codable {
+    public static let paddingPresets: [Double] = [0, 32, 64, 96, 128, 160]
+
     public var enabled: Bool
     public var preset: BackgroundPreset
     public var customHex: String?
     public var padding: Double
     public var rounded: Bool
     public var radius: Double
+    public var backgroundRadius: Double
     public var shadow: ShadowStyle
+    public var contentOpacity: Double
     public var source: BackgroundSource
     public var lightImagePath: String?
     public var darkImagePath: String?
@@ -83,7 +87,9 @@ public struct BackgroundStyle: Equatable, Codable {
         padding: Double = 48,
         rounded: Bool = true,
         radius: Double = 16,
+        backgroundRadius: Double = 0,
         shadow: ShadowStyle = .light,
+        contentOpacity: Double = 1,
         source: BackgroundSource = .preset,
         lightImagePath: String? = nil,
         darkImagePath: String? = nil,
@@ -95,7 +101,9 @@ public struct BackgroundStyle: Equatable, Codable {
         self.padding = padding
         self.rounded = rounded
         self.radius = radius
+        self.backgroundRadius = backgroundRadius
         self.shadow = shadow
+        self.contentOpacity = contentOpacity
         self.source = source
         self.lightImagePath = lightImagePath
         self.darkImagePath = darkImagePath
@@ -103,7 +111,7 @@ public struct BackgroundStyle: Equatable, Codable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case enabled, preset, customHex, padding, rounded, radius, shadow
+        case enabled, preset, customHex, padding, rounded, radius, backgroundRadius, shadow, contentOpacity
         case source, lightImagePath, darkImagePath, followsAppearance
     }
 
@@ -115,7 +123,11 @@ public struct BackgroundStyle: Equatable, Codable {
         padding = try values.decode(Double.self, forKey: .padding)
         rounded = try values.decode(Bool.self, forKey: .rounded)
         radius = try values.decode(Double.self, forKey: .radius)
+        // Existing styles keep their square outer frame until the user rounds it.
+        backgroundRadius = try values.decodeIfPresent(Double.self, forKey: .backgroundRadius) ?? 0
         shadow = try values.decode(ShadowStyle.self, forKey: .shadow)
+        // Saved styles from before opacity controls must retain their original appearance.
+        contentOpacity = try values.decodeIfPresent(Double.self, forKey: .contentOpacity) ?? 1
         // Existing preferences predate image backgrounds and retain their preset appearance.
         source = try values.decodeIfPresent(BackgroundSource.self, forKey: .source) ?? .preset
         lightImagePath = try values.decodeIfPresent(String.self, forKey: .lightImagePath)

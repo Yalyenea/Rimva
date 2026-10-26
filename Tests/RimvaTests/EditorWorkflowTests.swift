@@ -391,6 +391,71 @@ final class EditorWorkflowTests: XCTestCase {
         XCTAssertEqual(session.tool, .rectangle)
     }
 
+    @MainActor func testStyleShortcutsAdjustClampAndUndoBeforeCanvasFocus() throws {
+        let session = EditorSession()
+        session.load(try image())
+        session.style = BackgroundStyle(padding: 20, radius: 10)
+        let window = EditorWindow(contentRect: CGRect(x: 0, y: 0, width: 1008, height: 650), styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.session = session
+        defer { window.close() }
+        XCTAssertTrue(window.makeFirstResponder(nil))
+        func press(_ code: Int, modifiers: NSEvent.ModifierFlags = .shift, repeating: Bool = false) throws {
+            let event = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: modifiers, timestamp: 0,
+                                                     windowNumber: window.windowNumber, context: nil, characters: "",
+                                                     charactersIgnoringModifiers: "", isARepeat: repeating, keyCode: UInt16(code)))
+            window.sendEvent(event)
+        }
+        try press(kVK_UpArrow)
+        XCTAssertEqual(session.style.padding, 32)
+        XCTAssertEqual(Preferences.shared.defaultStyle.padding, 32)
+        session.undo()
+        XCTAssertEqual(session.style.padding, 20)
+        session.redo()
+        XCTAssertEqual(session.style.padding, 32)
+        try press(kVK_DownArrow)
+        XCTAssertEqual(session.style.padding, 0)
+        for code in [kVK_ANSI_Equal, kVK_ANSI_KeypadPlus] {
+            try press(code)
+            XCTAssertEqual(session.style.radius, 11)
+            try press(kVK_ANSI_Minus)
+            XCTAssertEqual(session.style.radius, 10)
+        }
+        try press(kVK_ANSI_KeypadMinus)
+        XCTAssertEqual(session.style.radius, 9)
+        try press(kVK_UpArrow, repeating: true)
+        XCTAssertEqual(session.style.padding, 32)
+        let changed = session.style
+        for modifiers: NSEvent.ModifierFlags in [[], [.shift, .command], [.shift, .control], [.shift, .option]] {
+            for code in [kVK_UpArrow, kVK_DownArrow, kVK_ANSI_Equal, kVK_ANSI_Minus] {
+                try press(code, modifiers: modifiers)
+                XCTAssertEqual(session.style, changed)
+            }
+        }
+
+        session.style.padding = 160; session.style.radius = 40
+        session.load(try image())
+        try press(kVK_UpArrow); try press(kVK_ANSI_Equal)
+        XCTAssertEqual(session.style.padding, 160)
+        XCTAssertEqual(session.style.radius, 40)
+        XCTAssertFalse(session.canUndo)
+        session.style.padding = 0; session.style.radius = 0
+        try press(kVK_DownArrow); try press(kVK_ANSI_Minus)
+        XCTAssertEqual(session.style.padding, 0)
+        XCTAssertEqual(session.style.radius, 0)
+        XCTAssertFalse(session.canUndo)
+
+        session.style.enabled = false; session.style.rounded = false
+        try press(kVK_UpArrow); try press(kVK_ANSI_Equal)
+        XCTAssertEqual(session.style.padding, 0)
+        XCTAssertEqual(session.style.radius, 0)
+        session.style.enabled = true; session.style.rounded = true
+        session.releaseImage()
+        try press(kVK_UpArrow); try press(kVK_ANSI_Equal)
+        XCTAssertEqual(session.style.padding, 0)
+        XCTAssertEqual(session.style.radius, 0)
+    }
+
     @MainActor func testToolShortcutsDoNotInterruptTextEditing() async throws {
         let session = EditorSession()
         session.load(try image())
@@ -410,6 +475,14 @@ final class EditorWorkflowTests: XCTestCase {
         XCTAssertEqual(session.tool, .text)
         XCTAssertFalse(session.backgroundShown)
         XCTAssertEqual(text.string, "b")
+        let initial = session.style
+        // Shift-minus must still type an underscore while entering annotation text.
+        let underscore = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: .shift, timestamp: 0,
+                                                      windowNumber: window.windowNumber, context: nil, characters: "_",
+                                                      charactersIgnoringModifiers: "_", isARepeat: false, keyCode: UInt16(kVK_ANSI_Minus)))
+        window.sendEvent(underscore)
+        XCTAssertEqual(text.string, "b_")
+        XCTAssertEqual(session.style, initial)
     }
 
     func testPNGExportPreservesTransparentRoundedCornersWithoutBackground() throws {
@@ -452,6 +525,15 @@ final class EditorWorkflowTests: XCTestCase {
         XCTAssertEqual(preferences.defaultStyle, initial)
         session.redo()
         XCTAssertEqual(preferences.defaultStyle.padding, 12)
+
+        session.beginInteraction()
+        for opacity in [0.9, 0.8, 0.7] { session.style.contentOpacity = opacity }
+        session.endInteraction()
+        XCTAssertEqual(preferences.defaultStyle.contentOpacity, 0.7)
+        session.undo()
+        XCTAssertEqual(session.style.contentOpacity, initial.contentOpacity)
+        session.redo()
+        XCTAssertEqual(preferences.defaultStyle.contentOpacity, 0.7)
 
         session.beginInteraction()
         for padding in [16.0, 20, 24] { preferences.defaultStyle.padding = padding }

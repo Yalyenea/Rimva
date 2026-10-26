@@ -196,6 +196,8 @@ private struct CaptureLauncherView: View {
                 .strokeBorder(Color(nsColor: palette.separator), lineWidth: 0.5)
         }
         .environment(\.locale, L10n.locale)
+        .background(InitialFocusReset())
+        .focusEffectDisabled()
     }
 
     private func shortcut(_ key: String) -> some View {
@@ -219,7 +221,6 @@ private struct CaptureLauncherView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(LauncherOptionStyle())
-        .focusEffectDisabled()
         .accessibilityLabel(title)
         .accessibilityHint(key)
     }

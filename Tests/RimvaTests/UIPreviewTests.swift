@@ -107,7 +107,7 @@ final class UIPreviewTests: XCTestCase {
         try ImageExporter.save(background(.dawn), to: day)
         try ImageExporter.save(background(.moon), to: night)
         let sample = try XCTUnwrap(SampleImage.make())
-        let style = BackgroundStyle(preset: .irisAbstract, padding: 32, radius: 12)
+        let style = BackgroundStyle(preset: .irisAbstract, padding: 32, radius: 12, backgroundRadius: 24)
 
         // A volatile domain in the XCTest process gives singletons fixed fixtures.
         // The running application's preferences and current document are never opened.
