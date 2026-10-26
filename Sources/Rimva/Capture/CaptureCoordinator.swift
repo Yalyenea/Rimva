@@ -91,6 +91,13 @@ final class CaptureCoordinator {
         onCancel?()
     }
 
+    func cancelSelection() {
+        // Panels hide when Rimva deactivates; release their session as well.
+        // Live scrolling intentionally runs in another app after these panels close.
+        guard !panels.isEmpty else { return }
+        cancel()
+    }
+
     private func showSelection(_ snapshots: [(NSScreen, CGImage)], windows: [SCWindow]) {
         let primaryTop = NSScreen.screens.first?.frame.maxY ?? 0
         // The Core Graphics list supplies front-to-back order; ScreenCaptureKit does not promise an order.

@@ -60,13 +60,15 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
             self?.statusItem?.isVisible = !hidden
         }
         capture.onCapture = { [weak self] image, opensEditor in self?.finishCapture(image, opensEditor: opensEditor) }
-        capture.onCancel = { [weak self] in self?.restoreCaptureContext() }
+        capture.onCancel = { [weak self] in self?.restoreCaptureContext(restoresFocus: NSApp.isActive) }
         capture.onError = { [weak self] error in
             guard let self else { return }
             self.restoreCaptureContext(); self.preferences.refreshSystemStatus(); self.showError(error, captureFailure: true)
         }
         hotKey.onTrigger = { [weak self] action in
             guard let self else { return }
+            // The same global key must also release an unfinished or hidden capture.
+            if self.capture.isCapturing { self.capture.cancel(); return }
             let mode: CaptureMode
             switch action {
             case .launcher: self.showCaptureLauncher(); return
@@ -131,6 +133,10 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool { showEditor(); return true }
     func application(_ sender: NSApplication, openFile filename: String) -> Bool { importImage(URL(fileURLWithPath: filename)); return true }
+
+    func applicationDidResignActive(_ notification: Notification) {
+        capture.cancelSelection()
+    }
 
     func showEditor() {
         if editorWindow == nil {
@@ -266,8 +272,9 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
     }
 
-    private func restoreCaptureContext() {
+    private func restoreCaptureContext(restoresFocus: Bool = true) {
         captureWindows.forEach { $0.orderFront(nil) }
+        if !restoresFocus { clearCaptureContext(); return }
         if let previousApplication, previousApplication.processIdentifier != ProcessInfo.processInfo.processIdentifier {
             previousApplication.activate(options: [])
         } else if let captureKeyWindow {
