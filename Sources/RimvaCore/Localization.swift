@@ -27,7 +27,19 @@ public enum L10n {
     private static let resources = Bundle.main.url(forResource: "Rimva_RimvaCore", withExtension: "bundle")
         .map { Bundle(url: $0)! } ?? Bundle.module
     private static let localizedBundles = ["en", "zh-Hans"].reduce(into: [String: Bundle]()) { bundles, code in
-        bundles[code] = Bundle(path: resources.path(forResource: code, ofType: "lproj")!)!
+        guard let bundle = localizedBundle(for: code, in: resources) else {
+            preconditionFailure("Missing localization resources for \(code)")
+        }
+        bundles[code] = bundle
+    }
+
+    static func localizedBundle(for code: String, in resources: Bundle) -> Bundle? {
+        // SwiftPM can lowercase script identifiers (zh-hans); Xcode preserves zh-Hans.
+        // Use the packaged spelling so explicit language selection works with either builder.
+        guard let localization = resources.localizations.first(where: {
+            $0.caseInsensitiveCompare(code) == .orderedSame
+        }), let directory = resources.resourceURL else { return nil }
+        return Bundle(url: directory.appendingPathComponent("\(localization).lproj", isDirectory: true))
     }
 
     public static var language: AppLanguage {

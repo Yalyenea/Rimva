@@ -55,14 +55,6 @@ jobs:
               cat "$report"
             fi
           done
-          test_bundle="$(swift build --configuration release --scratch-path .tmp/swift-build --show-bin-path)/RimvaPackageTests.xctest"
-          if [[ -d "$test_bundle" ]]; then
-            env -i PATH="$PATH" HOME="$HOME" DEVELOPER_DIR="$DEVELOPER_DIR" \
-              xcrun lldb --batch --one-line run --one-line-on-crash 'thread backtrace all' -- \
-              "$(xcrun --find xctest)" \
-              -XCTest RimvaTests.EditorWorkflowTests/testAutomaticCopyKeepsFeedbackVisibleAfterQuickCaptureReleasesTheImage \
-              "$test_bundle"
-          fi
 
       - name: Build universal app
         env:
