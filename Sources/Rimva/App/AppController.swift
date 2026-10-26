@@ -292,7 +292,9 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
         guard !capturePending, !capture.isCapturing, NSApp.modalWindow == nil else { return }
         if captureLauncher.isVisible { captureLauncher.close(); return }
         let screen = NSScreen.screens.first { $0.frame.contains(NSEvent.mouseLocation) } ?? NSScreen.main
-        captureLauncher.show(on: screen) { [weak self] in self?.startCapture($0) }
+        captureLauncher.show(on: screen, openEditor: { [weak self] in self?.showEditor() }) { [weak self] mode in
+            self?.startCapture(mode)
+        }
     }
 
     func chooseImage() {

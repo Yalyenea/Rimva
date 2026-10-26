@@ -9,19 +9,22 @@ final class CaptureLauncher: NSObject, NSWindowDelegate {
 
     private var panel: LauncherPanel?
     private var choose: ((CaptureMode) -> Void)?
+    private var openEditor: (() -> Void)?
     private var keyMonitor: Any?
     private var subscriptions: Set<AnyCancellable> = []
 
-    func show(on screen: NSScreen?, choose: @escaping (CaptureMode) -> Void) {
+    func show(on screen: NSScreen?, openEditor: @escaping () -> Void, choose: @escaping (CaptureMode) -> Void) {
         close()
         self.choose = choose
-        let size = NSSize(width: 568, height: 104)
+        self.openEditor = openEditor
+        let size = NSSize(width: 706, height: 104)
         let panel = LauncherPanel(contentRect: NSRect(origin: .zero, size: size),
                                   styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         panel.isReleasedWhenClosed = false
         panel.isFloatingPanel = true
         panel.hidesOnDeactivate = false
-        panel.level = .floating
+        // Match the selection overlay so floating windows and menus cannot cover the launcher.
+        panel.level = .screenSaver
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient, .ignoresCycle]
         panel.isOpaque = false
         panel.backgroundColor = .clear
@@ -29,7 +32,8 @@ final class CaptureLauncher: NSObject, NSWindowDelegate {
         panel.appearance = Preferences.shared.appearance.native
         panel.title = L("截图入口")
         panel.delegate = self
-        let content = CaptureLauncherView { [weak self] mode in self?.select(mode) }
+        let content = CaptureLauncherView(choose: { [weak self] mode in self?.select(mode) },
+                                          openEditor: { [weak self] in self?.edit() })
         panel.contentView = NSHostingView(rootView: content.ignoresSafeArea())
         let target = screen ?? NSScreen.screens.first(where: { $0.frame.contains(NSEvent.mouseLocation) }) ?? NSScreen.main
         if let visibleFrame = target?.visibleFrame {
@@ -48,6 +52,7 @@ final class CaptureLauncher: NSObject, NSWindowDelegate {
             case 19, 84: self.select(.scrolling); return nil
             case 20, 85: self.select(.window); return nil
             case 21, 86: self.select(.fullScreen); return nil
+            case 23, 87: self.edit(); return nil
             default: return event
             }
         }
@@ -61,11 +66,13 @@ final class CaptureLauncher: NSObject, NSWindowDelegate {
             .sink { [weak self] _ in self?.close() }
             .store(in: &subscriptions)
         // A nonactivating panel accepts the choice without bringing editor windows forward.
-        panel.makeKeyAndOrderFront(nil)
+        panel.orderFrontRegardless()
+        panel.makeKey()
     }
 
     func close() {
         choose = nil
+        openEditor = nil
         if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
         keyMonitor = nil
         subscriptions.removeAll()
@@ -78,6 +85,12 @@ final class CaptureLauncher: NSObject, NSWindowDelegate {
     }
 
     func windowDidResignKey(_ notification: Notification) { close() }
+
+    private func edit() {
+        guard let openEditor else { return }
+        close()
+        openEditor()
+    }
 
     private func select(_ mode: CaptureMode) {
         guard let choose else { return }
@@ -95,15 +108,17 @@ private final class LauncherPanel: NSPanel {
 
 private struct CaptureLauncherView: View {
     var choose: (CaptureMode) -> Void
+    var openEditor: () -> Void
     @ObservedObject private var preferences = Preferences.shared
 
     var body: some View {
         let palette = preferences.palette
         HStack(spacing: 8) {
-            option(L("区域截图"), icon: "viewfinder", key: "1", mode: .region)
-            option(L("长截屏"), icon: "arrow.down.to.line.compact", key: "2", mode: .scrolling)
-            option(L("窗口截图"), icon: "macwindow", key: "3", mode: .window)
-            option(L("全屏截图"), icon: "rectangle.dashed", key: "4", mode: .fullScreen)
+            option(L("区域截图"), icon: "viewfinder", key: "1") { choose(.region) }
+            option(L("长截屏"), icon: "arrow.down.to.line.compact", key: "2") { choose(.scrolling) }
+            option(L("窗口截图"), icon: "macwindow", key: "3") { choose(.window) }
+            option(L("全屏截图"), icon: "rectangle.dashed", key: "4") { choose(.fullScreen) }
+            option(L("打开编辑器"), icon: "square.and.pencil", key: "5", action: openEditor)
         }
         .padding(12)
         .foregroundStyle(Color(nsColor: palette.text))
@@ -115,8 +130,8 @@ private struct CaptureLauncherView: View {
         .environment(\.locale, L10n.locale)
     }
 
-    private func option(_ title: String, icon: String, key: String, mode: CaptureMode) -> some View {
-        Button { choose(mode) } label: {
+    private func option(_ title: String, icon: String, key: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
             VStack(spacing: 10) {
                 HStack {
                     Image(systemName: icon).font(.system(size: 20, weight: .regular))
