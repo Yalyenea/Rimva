@@ -19,6 +19,7 @@
 "选择" = "Select";
 "该组合键用于系统截图，请换一个。" = "This shortcut is used for macOS screenshots. Choose another.";
 "快捷键已被占用，请换一个。" = "This shortcut is in use. Choose another.";
+"无法启用截图快捷键（错误 %d）。" = "Couldn't enable capture shortcuts (error %d).";
 "按下组合键…" = "Press a shortcut…";
 "点击录入快捷键" = "Record shortcut";
 "截图快捷键" = "Capture shortcut";
@@ -26,6 +27,7 @@
 "需要屏幕录制权限。请在系统设置中允许 Rimva 录制屏幕，再重新截图。" = "Allow Rimva to record your screen in System Settings, then try again.";
 "无法找到可截图的显示器。请检查显示器连接后重试。" = "No display is available. Check the connection and try again.";
 "截图失败：%@" = "Capture failed: %@";
+"目标窗口已关闭或无法共享，请重新选择。" = "The window closed or can't be captured. Select another window.";
 "取消 Esc" = "Cancel Esc";
 "截图 ↩" = "Capture ↩";
 "截图选区。拖动选择，空格切换窗口，回车截图，Escape 取消。" = "Capture area. Drag to select, Space to switch modes, Return to capture, Escape to cancel.";
@@ -202,6 +204,18 @@
 "保存当前图片？" = "Save the current image?";
 "当前图片尚未保存。继续会丢弃图片和编辑记录。" = "This image has unsaved changes. Continuing discards the image and its edit history.";
 "丢弃" = "Discard";
+"已复制" = "Copied";
+"已保存" = "Saved";
+"截图记录" = "Captures";
+"返回编辑" = "Back to editor";
+"还没有截图" = "No captures yet";
+"打开截图 %@" = "Open capture %@";
+"复制截图" = "Copy capture";
+"刷新" = "Refresh";
+"截图记录保存失败：%@" = "Couldn't save capture history: %@";
+"截图记录尚未保存" = "Some captures aren't saved";
+"部分截图未能保存到本机记录。仍然退出会丢失这些截图。" = "Some captures couldn't be saved to local history. Quitting will discard them.";
+"仍然退出" = "Quit anyway";
 "已复制成图，可继续编辑。" = "Image copied. You can keep editing.";
 "已保存 %@" = "Saved %@";
 "自动保存" = "Auto save";

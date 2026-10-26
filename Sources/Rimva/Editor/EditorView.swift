@@ -14,7 +14,7 @@ final class EditorWindow: NSWindow {
     override func sendEvent(_ event: NSEvent) {
         // The window receives letters even before a canvas click gives it focus.
         // Text entry and modified menu commands keep their normal event handling.
-        guard event.type == .keyDown, let session, session.image != nil,
+        guard event.type == .keyDown, let session, session.image != nil, !session.historyShown,
               attachedSheet == nil, !(firstResponder is NSTextView),
               event.modifierFlags.intersection([.command, .control, .option]).isEmpty,
               let key = event.charactersIgnoringModifiers?.lowercased() else {
@@ -29,6 +29,8 @@ final class EditorWindow: NSWindow {
             super.sendEvent(event)
         }
     }
+
+
 }
 
 extension Color {
@@ -150,8 +152,14 @@ private struct IconHelpBubble: View {
 
 struct EditorView: View {
     @ObservedObject var session: EditorSession
+    @ObservedObject private var history: CaptureHistory
     @ObservedObject private var preferences = Preferences.shared
     let controller: AppController
+    init(session: EditorSession, controller: AppController) {
+        self.session = session
+        self.controller = controller
+        history = controller.history
+    }
     var body: some View {
         VStack(spacing: 0) {
             toolbar
@@ -159,7 +167,12 @@ struct EditorView: View {
             HStack(spacing: 0) {
                 ZStack(alignment: .top) {
                     Color.rimvaCanvas
-                    if session.image != nil {
+                    if session.historyShown {
+                        CaptureHistoryView(history: history, canReturnToEditor: session.image != nil,
+                                           back: { controller.setHistoryShown(false) }, capture: controller.showCaptureLauncher,
+                                           open: controller.openCapture, copy: controller.copyCapture,
+                                           refresh: controller.refreshCaptureHistory)
+                    } else if session.image != nil {
                         CanvasView(session: session, onImport: controller.importImage, onPaste: controller.pasteImage)
                         if session.tool != .select || session.selectedID != nil { contextTools.padding(.top, 12) }
                         VStack {
@@ -219,12 +232,12 @@ struct EditorView: View {
                 ForEach(EditorTool.allCases) { tool in
                     IconButton(title: tool.title, symbol: tool.symbol, shortcut: tool.shortcut.uppercased(), active: session.tool == tool) { session.selectTool(tool) }
                 }
-            }.disabled(session.image == nil)
+            }.disabled(session.image == nil || session.historyShown)
             divider
-            IconButton(title: L("撤销"), symbol: "arrow.uturn.backward", shortcut: "⌘Z", action: session.undo).disabled(!session.canUndo)
-            IconButton(title: L("重做"), symbol: "arrow.uturn.forward", shortcut: "⇧⌘Z", action: session.redo).disabled(!session.canRedo)
+            IconButton(title: L("撤销"), symbol: "arrow.uturn.backward", shortcut: "⌘Z", action: session.undo).disabled(!session.canUndo || session.historyShown)
+            IconButton(title: L("重做"), symbol: "arrow.uturn.forward", shortcut: "⇧⌘Z", action: session.redo).disabled(!session.canRedo || session.historyShown)
             divider
-            IconButton(title: L("背景外观"), symbol: "rectangle.split.2x2", shortcut: "B", active: session.backgroundShown, enabled: session.image != nil) { session.backgroundShown.toggle() }
+            IconButton(title: L("背景外观"), symbol: "rectangle.split.2x2", shortcut: "B", active: session.backgroundShown, enabled: session.image != nil && !session.historyShown) { session.backgroundShown.toggle() }
                 .popover(isPresented: Binding(get: { session.backgroundShown }, set: { value in
                     // Dismissal can write the current value during a SwiftUI update.
                     if session.backgroundShown != value { session.backgroundShown = value }
@@ -232,14 +245,17 @@ struct EditorView: View {
                     BackgroundPopover(session: session)
                 }
             WindowDragArea().frame(minWidth: 12, maxWidth: .infinity, maxHeight: .infinity)
+            IconButton(title: L("截图记录"), symbol: "photo.stack", active: session.historyShown) {
+                controller.setHistoryShown(!session.historyShown)
+            }
             IconButton(title: L("截图入口"), symbol: "viewfinder", action: controller.showCaptureLauncher)
             IconButton(title: L("设置"), symbol: "slider.horizontal.3", shortcut: "⌘,", action: controller.showSettings)
-            IconButton(title: L("保存"), symbol: "square.and.arrow.down", shortcut: "⌘S", action: controller.saveImage).disabled(session.image == nil)
+            IconButton(title: L("保存"), symbol: "square.and.arrow.down", shortcut: "⌘S", action: controller.saveImage).disabled(session.image == nil || session.historyShown)
                 .contextMenu {
                     Button(L("另存为…"), action: controller.saveImageAs)
                     Button(L("在访达中显示"), action: controller.revealSavedImage).disabled(session.savedURL == nil)
                 }
-            IconButton(title: L("复制成图"), symbol: "square.on.square", shortcut: "⌘↵", primary: true, action: controller.copyImage).disabled(session.image == nil)
+            IconButton(title: L("复制成图"), symbol: "square.on.square", shortcut: "⌘↵", primary: true, action: controller.copyImage).disabled(session.image == nil || session.historyShown)
         }.padding(.horizontal, 10).frame(height: EditorToolbarMetrics.height).background(Color.rimvaSurface)
     }
     private var divider: some View { Rectangle().fill(Color(nsColor: preferences.palette.separator)).frame(width: 1, height: 14).padding(.horizontal, 4) }

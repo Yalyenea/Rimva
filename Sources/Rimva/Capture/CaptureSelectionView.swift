@@ -12,13 +12,15 @@ final class CaptureSelectionView: NSView, NSTextFieldDelegate {
     var isScrollingMode = false { didSet { refreshLabels(); refresh() } }
     var isFullScreenMode = false { didSet { selection = isFullScreenMode ? bounds : nil; refresh() } }
     var selectedRect: NSRect? { selection }
+    private(set) var selectedWindowIndex: Int?
     var canConfirm: Bool {
+        if isWindowMode { return selectedWindowIndex != nil }
         guard let selection, let pixelRect else { return false }
         return isScrollingMode ? selection.width >= 40 && selection.height >= 80 : pixelRect.width >= 1 && pixelRect.height >= 1
     }
 
-    private let image: CGImage
-    private let preview: NSImage
+    private let image: CGImage?
+    private let preview: NSImage?
     private let windowRects: [NSRect]
     private var selection: NSRect?
     private var drag: Drag?
@@ -43,9 +45,9 @@ final class CaptureSelectionView: NSView, NSTextFieldDelegate {
         case create, move, resize(Int)
     }
 
-    init(image: CGImage, size: NSSize, windowRects: [NSRect]) {
+    init(image: CGImage?, size: NSSize, windowRects: [NSRect]) {
         self.image = image
-        preview = NSImage(cgImage: image, size: size)
+        preview = image.map { NSImage(cgImage: $0, size: size) }
         self.windowRects = windowRects
         toolbarSafeBounds = NSRect(origin: .zero, size: size)
         super.init(frame: NSRect(origin: .zero, size: size))
@@ -145,6 +147,7 @@ final class CaptureSelectionView: NSView, NSTextFieldDelegate {
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
     override var acceptsFirstResponder: Bool { true }
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
     override func layout() {
         super.layout()
@@ -254,13 +257,15 @@ final class CaptureSelectionView: NSView, NSTextFieldDelegate {
 
     func clearSelection() {
         selection = nil
+        selectedWindowIndex = nil
         drag = nil
         refresh()
     }
 
     func updateWindowSelection(at point: NSPoint) {
         guard isWindowMode else { return }
-        selection = windowRects.first(where: { $0.contains(point) })?.intersection(bounds)
+        selectedWindowIndex = windowRects.firstIndex(where: { $0.contains(point) })
+        selection = selectedWindowIndex.map { windowRects[$0].intersection(bounds) }
         refresh()
     }
 
@@ -278,8 +283,10 @@ final class CaptureSelectionView: NSView, NSTextFieldDelegate {
     override func mouseDown(with event: NSEvent) {
         dismissPrecisionControls()
         onActivate?()
-        window?.makeKey()
-        window?.makeFirstResponder(self)
+        if !isWindowMode {
+            window?.makeKey()
+            window?.makeFirstResponder(self)
+        }
         guard !isFullScreenMode else { return }
         let point = clamped(convert(event.locationInWindow, from: nil))
         pointer = point
@@ -347,13 +354,22 @@ final class CaptureSelectionView: NSView, NSTextFieldDelegate {
     }
 
     override func draw(_ dirtyRect: NSRect) {
-        preview.draw(in: bounds)
-        NSColor.black.withAlphaComponent(0.38).setFill()
-        bounds.fill()
+        if let preview {
+            preview.draw(in: bounds)
+            NSColor.black.withAlphaComponent(0.38).setFill()
+            bounds.fill()
+        } else {
+            // Window selection stays live; only dim the desktop outside the hovered window.
+            let mask = NSBezierPath(rect: bounds)
+            if let selection, !selection.isEmpty { mask.appendRect(selection) }
+            mask.windingRule = .evenOdd
+            NSColor.black.withAlphaComponent(0.22).setFill()
+            mask.fill()
+        }
         if let selection, selection.width > 0, selection.height > 0 {
             NSGraphicsContext.saveGraphicsState()
             NSBezierPath(rect: selection).addClip()
-            preview.draw(in: bounds)
+            preview?.draw(in: bounds)
             NSGraphicsContext.restoreGraphicsState()
             Preferences.shared.palette.accent.setStroke()
             let outline = NSBezierPath(rect: selection.insetBy(dx: 0.5, dy: 0.5))
@@ -381,21 +397,22 @@ final class CaptureSelectionView: NSView, NSTextFieldDelegate {
     }
 
     func selectedImage() -> CGImage? {
-        guard let pixelRect, pixelRect.width >= 1, pixelRect.height >= 1 else { return nil }
+        // Window mode passes its selected window ID to ScreenCaptureKit, never a desktop crop.
+        guard !isWindowMode, let image, let pixelRect, pixelRect.width >= 1, pixelRect.height >= 1 else { return nil }
         return image.cropping(to: pixelRect)
     }
 
     private var pixelRect: CGRect? {
         guard let selection, !selection.isEmpty else { return nil }
-        let scaleX = CGFloat(image.width) / bounds.width
-        let scaleY = CGFloat(image.height) / bounds.height
+        let scaleX = image.map { CGFloat($0.width) / bounds.width } ?? window?.backingScaleFactor ?? 1
+        let scaleY = image.map { CGFloat($0.height) / bounds.height } ?? window?.backingScaleFactor ?? 1
         // CGImage crops from the top-left; AppKit selection coordinates start at the bottom-left.
         let left = (selection.minX * scaleX).rounded()
         let right = (selection.maxX * scaleX).rounded()
         let top = ((bounds.height - selection.maxY) * scaleY).rounded()
         let bottom = ((bounds.height - selection.minY) * scaleY).rounded()
         return CGRect(x: left, y: top, width: right - left, height: bottom - top)
-            .intersection(CGRect(x: 0, y: 0, width: image.width, height: image.height))
+            .intersection(CGRect(x: 0, y: 0, width: bounds.width * scaleX, height: bounds.height * scaleY))
     }
 
     private func refresh() {
@@ -412,7 +429,8 @@ final class CaptureSelectionView: NSView, NSTextFieldDelegate {
     }
 
     override func keyDown(with event: NSEvent) {
-        guard [123, 124, 125, 126].contains(event.keyCode), !isWindowMode, !isFullScreenMode, var selection else { super.keyDown(with: event); return }
+        guard [123, 124, 125, 126].contains(event.keyCode), !isWindowMode, !isFullScreenMode,
+              let image, var selection else { super.keyDown(with: event); return }
         let step: CGFloat = event.modifierFlags.contains(.shift) ? 10 : 1
         let dx: CGFloat = event.keyCode == 123 ? -step : event.keyCode == 124 ? step : 0
         let dy: CGFloat = event.keyCode == 125 ? -step : event.keyCode == 126 ? step : 0
@@ -433,7 +451,7 @@ final class CaptureSelectionView: NSView, NSTextFieldDelegate {
     }
 
     private func applyDimensions(_ sender: Any?) {
-        guard var selection else { return }
+        guard let image, var selection else { return }
         var width = max(1, CGFloat(widthField.integerValue)) * bounds.width / CGFloat(image.width)
         var height = max(1, CGFloat(heightField.integerValue)) * bounds.height / CGFloat(image.height)
         if let ratio = selectedRatio {
@@ -459,6 +477,7 @@ final class CaptureSelectionView: NSView, NSTextFieldDelegate {
     }
 
     private func drawMagnifier(at point: NSPoint) {
+        guard let image else { return }
         let scaleX = CGFloat(image.width) / bounds.width, scaleY = CGFloat(image.height) / bounds.height
         let x = min(image.width - 1, Int((point.x * scaleX).rounded()))
         let y = min(image.height - 1, Int(((bounds.height - point.y) * scaleY).rounded()))

@@ -20,6 +20,8 @@ final class CaptureCoordinator {
     private var views: [CaptureSelectionView] = []
     private var keyMonitor: Any?
     private var screenObserver: NSObjectProtocol?
+    private var workspaceObservers: [NSObjectProtocol] = []
+    private let windowKeys = CaptureKeySession(signature: 0x52494D57)
     private var mode: CaptureMode = .region
     private weak var activeView: CaptureSelectionView?
     private var scrollingSession: ScrollingCaptureSession?
@@ -50,13 +52,19 @@ final class CaptureCoordinator {
                 let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
                 try Task.checkCancellation()
                 guard self.sessionID == id else { return }
+                guard !content.displays.isEmpty else { throw CaptureFailure.noDisplay }
                 let screens = NSScreen.screens
                 let targetScreens = mode == .fullScreen
                     ? screens.filter { $0.frame.contains(pointer) }
                     : screens
                 guard !targetScreens.isEmpty else { throw CaptureFailure.noDisplay }
                 let ownWindows = content.windows.filter { $0.owningApplication?.processID == ProcessInfo.processInfo.processIdentifier }
-                var snapshots: [(NSScreen, CGImage)] = []
+                if mode == .window {
+                    // Only enumerate metadata. The window picker observes the live desktop.
+                    try self.showSelection(targetScreens.map { ($0, nil) }, windows: content.windows)
+                    return
+                }
+                var snapshots: [(NSScreen, CGImage?)] = []
                 // Freeze every display before showing any overlay, so the overlay cannot enter another capture.
                 for screen in targetScreens {
                     guard let number = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber,
@@ -74,7 +82,7 @@ final class CaptureCoordinator {
                     guard self.sessionID == id else { return }
                     snapshots.append((screen, image))
                 }
-                self.showSelection(snapshots, windows: content.windows)
+                try self.showSelection(snapshots, windows: content.windows)
             } catch is CancellationError {
                 // cancel() already releases the session and calls its completion.
             } catch {
@@ -92,21 +100,26 @@ final class CaptureCoordinator {
     }
 
     func cancelSelection() {
-        // Panels hide when Rimva deactivates; release their session as well.
-        // Live scrolling intentionally runs in another app after these panels close.
+        // Context changes dismiss selection; live scrolling owns a separate session.
         guard !panels.isEmpty else { return }
         cancel()
     }
 
-    private func showSelection(_ snapshots: [(NSScreen, CGImage)], windows: [SCWindow]) {
+    static func isSelectableWindow(layer: Int, frame: CGRect, ownerPID: pid_t?) -> Bool {
+        layer >= 0 && layer < Int(CGWindowLevelForKey(.screenSaverWindow))
+            && frame.width.isFinite && frame.height.isFinite && frame.width >= 24 && frame.height >= 24
+            && ownerPID != ProcessInfo.processInfo.processIdentifier
+    }
+
+    private func showSelection(_ snapshots: [(NSScreen, CGImage?)], windows: [SCWindow]) throws {
         let primaryTop = NSScreen.screens.first?.frame.maxY ?? 0
         // The Core Graphics list supplies front-to-back order; ScreenCaptureKit does not promise an order.
         let orderedIDs = (CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? [])
             .compactMap { ($0[kCGWindowNumber as String] as? NSNumber)?.uint32Value }
         let rank = Dictionary(orderedIDs.enumerated().map { ($0.element, $0.offset) }, uniquingKeysWith: min)
         let selectable = windows.filter {
-            $0.isOnScreen && $0.windowLayer == 0 && $0.frame.width >= 24 && $0.frame.height >= 24
-                && $0.owningApplication?.processID != ProcessInfo.processInfo.processIdentifier
+            $0.isOnScreen && Self.isSelectableWindow(layer: $0.windowLayer, frame: $0.frame,
+                                                    ownerPID: $0.owningApplication?.processID)
         }.sorted { (rank[$0.windowID] ?? Int.max) < (rank[$1.windowID] ?? Int.max) }
         for (screen, image) in snapshots {
             let windowRects = selectable.map { window in
@@ -133,6 +146,11 @@ final class CaptureCoordinator {
             }
             view.onConfirm = { [weak self, weak view] opensEditor in
                 guard let self, let view else { return }
+                if self.mode == .window {
+                    guard let index = view.selectedWindowIndex else { NSSound.beep(); return }
+                    self.captureWindow(selectable[index], opensEditor: opensEditor)
+                    return
+                }
                 if self.mode == .scrolling {
                     guard view.canConfirm, let region = view.selectedRect else { NSSound.beep(); return }
                     let center = CGPoint(x: screen.frame.minX + region.midX, y: primaryTop - screen.frame.minY - region.midY)
@@ -144,13 +162,18 @@ final class CaptureCoordinator {
                 self.finish(image, opensEditor: opensEditor)
             }
             view.onCancel = { [weak self] in self?.cancel() }
-            let panel = CapturePanel(contentRect: screen.frame, styleMask: .borderless, backing: .buffered, defer: false)
+            let panel = CapturePanel(contentRect: screen.frame, styleMask: [.borderless, .nonactivatingPanel],
+                                     backing: .buffered, defer: false)
+            panel.acceptsSelectionKeys = mode != .window
             panel.onCancel = { [weak self] in self?.cancel() }
             panel.isReleasedWhenClosed = false
             panel.level = .screenSaver
             panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
-            panel.isOpaque = true
-            panel.backgroundColor = .black
+            panel.isOpaque = mode != .window
+            panel.backgroundColor = mode == .window ? .clear : .black
+            // Explicitly register transparent pixels for clicks; otherwise the live
+            // window-shaped hole can pass the click through to the original app.
+            panel.ignoresMouseEvents = false
             panel.hasShadow = false
             panel.acceptsMouseMovedEvents = true
             panel.contentView = view
@@ -158,37 +181,86 @@ final class CaptureCoordinator {
             views.append(view)
             panel.setFrame(screen.frame, display: false)
         }
-        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            guard let self else { return event }
-            // Text fields keep their editing keys; the capture panel owns Escape.
-            if event.window?.firstResponder is NSTextView { return event }
-            switch event.keyCode {
-            case 36, 76:
-                if self.activeView?.canConfirm == true { self.activeView?.onConfirm?(false) }
-                else { NSSound.beep() }
-                return nil
-            case 49:
-                guard self.mode != .scrolling, self.mode != .fullScreen else { return nil }
-                self.mode = self.mode == .window ? .region : .window
-                self.views.forEach { $0.isWindowMode = self.mode == .window; $0.clearSelection() }
-                if let view = self.views.first(where: { $0.window?.frame.contains(NSEvent.mouseLocation) == true }) {
-                    self.activeView = view
-                    view.updateWindowSelection(at: view.convert(view.window!.convertPoint(fromScreen: NSEvent.mouseLocation), from: nil))
+        if mode == .window {
+            try windowKeys.start([53, 36, 76, 49]) { [weak self] key in
+                guard let self else { return }
+                switch key {
+                case 53: self.cancel()
+                case 49: self.switchMode()
+                default:
+                    if self.activeView?.canConfirm == true { self.activeView?.onConfirm?(false) }
+                    else { NSSound.beep() }
                 }
-                return nil
-            default: return event
+            }
+        } else {
+            keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+                guard let self else { return event }
+                // Text fields keep their editing keys; the capture panel owns Escape.
+                if event.window?.firstResponder is NSTextView { return event }
+                switch event.keyCode {
+                case 36, 76:
+                    if self.activeView?.canConfirm == true { self.activeView?.onConfirm?(false) }
+                    else { NSSound.beep() }
+                    return nil
+                case 49:
+                    guard self.mode != .scrolling, self.mode != .fullScreen else { return nil }
+                    self.switchMode()
+                    return nil
+                default: return event
+                }
             }
         }
+        let selectionID = sessionID
         screenObserver = NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main) { [weak self] _ in
-            Task { @MainActor in self?.cancel() }
+            Task { @MainActor in
+                guard let self, self.sessionID == selectionID else { return }
+                self.cancel()
+            }
         }
-        NSApp.activate(ignoringOtherApps: true)
+        let workspace = NSWorkspace.shared.notificationCenter
+        for name in [NSWorkspace.didActivateApplicationNotification, NSWorkspace.activeSpaceDidChangeNotification] {
+            workspaceObservers.append(workspace.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                Task { @MainActor in
+                    guard let self, self.sessionID == selectionID else { return }
+                    self.cancelSelection()
+                }
+            })
+        }
         panels.forEach { $0.orderFrontRegardless() }
         if let view = views.first(where: { $0.window?.frame.contains(NSEvent.mouseLocation) == true }), let panel = view.window {
             activeView = view
-            panel.makeKey()
-            panel.makeFirstResponder(view)
+            if mode != .window {
+                panel.makeKey()
+                panel.makeFirstResponder(view)
+            }
             view.updateWindowSelection(at: view.convert(panel.convertPoint(fromScreen: NSEvent.mouseLocation), from: nil))
+        }
+    }
+
+    private func switchMode() {
+        let next: CaptureMode = mode == .window ? .region : .window
+        let cursor = includesCursor
+        cleanUp()
+        start(next, includesCursor: cursor)
+    }
+
+    private func captureWindow(_ window: SCWindow, opensEditor: Bool) {
+        guard let id = sessionID else { return }
+        closeSelection()
+        captureTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                let image = try await NativeWindowCapture.image(of: window.windowID, includesCursor: self.includesCursor)
+                try Task.checkCancellation()
+                guard self.sessionID == id else { return }
+                self.finish(image, opensEditor: opensEditor)
+            } catch is CancellationError {
+                // Cancellation already released the capture session.
+            } catch {
+                guard self.sessionID == id else { return }
+                self.cleanUp()
+                self.onError?(CaptureFailure.capture(error.localizedDescription))
+            }
         }
     }
 
@@ -203,8 +275,7 @@ final class CaptureCoordinator {
             return
         }
         closeSelection()
-        // Selection activates Rimva. Return focus to the chosen content before live sampling
-        // so it receives scrolling and keeps the same window in front.
+        // Return keyboard input to the chosen content before live scrolling begins.
         target?.activate(options: [])
         let session = ScrollingCaptureSession(screen: screen, region: region, includesCursor: includesCursor)
         session.onComplete = { [weak self] image, opensEditor in self?.finish(image, opensEditor: opensEditor) }
@@ -233,10 +304,14 @@ final class CaptureCoordinator {
         closeSelection()
         if let screenObserver { NotificationCenter.default.removeObserver(screenObserver) }
         screenObserver = nil
+        let workspace = NSWorkspace.shared.notificationCenter
+        workspaceObservers.forEach { workspace.removeObserver($0) }
+        workspaceObservers.removeAll()
         isCapturing = false
     }
 
     private func closeSelection() {
+        windowKeys.stop()
         if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
         keyMonitor = nil
         panels.forEach { $0.orderOut(nil); $0.contentView = nil; $0.close() }
@@ -261,8 +336,9 @@ private enum CaptureFailure: LocalizedError {
 @MainActor
 final class CapturePanel: NSPanel {
     var onCancel: (() -> Void)?
-    override var canBecomeKey: Bool { true }
-    override var canBecomeMain: Bool { true }
+    var acceptsSelectionKeys = true
+    override var canBecomeKey: Bool { acceptsSelectionKeys }
+    override var canBecomeMain: Bool { false }
 
     override func sendEvent(_ event: NSEvent) {
         // Handle Escape before the focused control, including the dimensions field editor.

@@ -10,28 +10,42 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
     let session = EditorSession()
     let preferences = Preferences.shared
     let hotKey: HotKey
+    let history: CaptureHistory
     private let capture = CaptureCoordinator()
     private let captureLauncher = CaptureLauncher()
+    private let captureFeedback = CaptureFeedback()
+    private var latestCapture: CGImage?
+    private var latestCaptureID: UUID?
+    private var historyImageTask: Task<Void, Never>?
+    private var historyCopyTask: Task<Void, Never>?
+    private var historyLoadTask: Task<Void, Never>?
+    private var historyDirectorySubscription: AnyCancellable?
     private var editorWindow: NSWindow?
     private var settingsWindow: NSWindow?
     private var statusItem: NSStatusItem?
-    private var capturePending = false
     private var languageSubscription: AnyCancellable?
     private var menuBarSubscription: AnyCancellable?
     private var themeSubscription: AnyCancellable?
     private var documentSubscription: AnyCancellable?
-    private var captureWindows: [NSWindow] = []
     private weak var captureKeyWindow: NSWindow?
     private var previousApplication: NSRunningApplication?
 
-    init(hotKey: HotKey? = nil) {
+    init(hotKey: HotKey? = nil, history: CaptureHistory? = nil) {
         self.hotKey = hotKey ?? HotKey()
+        self.history = history ?? CaptureHistory()
         super.init()
+        self.history.onError = { [weak self] error in
+            self?.showError(NSError(domain: "Rimva.CaptureHistory", code: 1,
+                                    userInfo: [NSLocalizedDescriptionKey: L("截图记录保存失败：%@", error.localizedDescription)]))
+        }
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
         NSApp.appearance = preferences.appearance.native
+        historyDirectorySubscription = preferences.$saveFolder.removeDuplicates().sink { [weak self] folder in
+            self?.loadCaptureHistory(from: folder)
+        }
         documentSubscription = session.objectWillChange.sink { [weak self] _ in
             // Published values are delivered before assignment; inspect the completed change.
             DispatchQueue.main.async {
@@ -93,14 +107,20 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     func finishCapture(_ image: CGImage, opensEditor: Bool = false) {
+        historyCopyTask?.cancel()
+        // Retain the original pixels independently of the clipboard and the editor's lifetime.
+        latestCapture = image
         session.load(image)
         preferences.refreshSystemStatus()
         var outputError: Error?
+        var copied = false
+        var saved = false
+        var savedFile: URL?
         if preferences.automaticCopy {
             do {
                 try ImageExporter.copy(renderedImage(image))
                 session.markCopied()
-                session.notify(L("已自动复制当前成图；编辑后请重新复制。"))
+                copied = true
             } catch { outputError = error }
         }
         if preferences.automaticSave {
@@ -108,9 +128,14 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 let url = try ImageExporter.saveAutomatically(renderedImage(image), in: preferences.saveFolder)
                 session.markSaved(to: url)
                 preferences.lastSavedURL = url
+                savedFile = url
+                saved = true
                 session.notify(L("已自动保存 %@", url.lastPathComponent))
             } catch { outputError = error }
         }
+        let entry = history.record(image, savedFile: savedFile)
+        latestCaptureID = entry.id
+        session.captureID = entry.id
         if opensEditor || preferences.opensEditorAfterCapture || outputError != nil ||
             (!preferences.automaticCopy && !preferences.automaticSave) {
             clearCaptureContext()
@@ -119,7 +144,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
         } else {
             // A completed quick capture must not prompt to save again on the next capture.
             session.releaseImage()
-            // Activating the selection overlay can bring previously ordered-out windows back.
+            // A quick capture returns to the original app without leaving the editor in front.
             editorWindow?.orderOut(nil)
             settingsWindow?.orderOut(nil)
             if let previousApplication, previousApplication.processIdentifier != ProcessInfo.processInfo.processIdentifier {
@@ -128,6 +153,9 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 NSApp.hide(nil)
             }
             clearCaptureContext()
+        }
+        if copied || saved {
+            captureFeedback.show(copied: copied) { [weak self] in self?.editCapture(image, captureID: entry.id) }
         }
     }
 
@@ -139,6 +167,13 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     func showEditor() {
+        historyImageTask?.cancel()
+        captureLauncher.close()
+        captureFeedback.close()
+        if session.image == nil, let latestCapture {
+            session.load(latestCapture)
+            session.captureID = latestCaptureID
+        }
         if editorWindow == nil {
             let window = makeWindow(size: CGSize(width: 1008, height: 650), title: "Rimva", resizable: true, editorSession: session)
             window.minSize = CGSize(width: 800, height: 520)
@@ -159,6 +194,8 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     func showSettings() {
+        captureLauncher.close()
+        captureFeedback.close()
         preferences.refreshSystemStatus()
         if settingsWindow == nil {
             let available = NSScreen.main?.visibleFrame.size ?? CGSize(width: 1280, height: 800)
@@ -213,12 +250,33 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        confirmDiscard() ? .terminateNow : .terminateCancel
+        guard confirmDiscard() else { return .terminateCancel }
+        let discardsFailedCaptures: Bool
+        if history.hasFailedWrites {
+            let alert = NSAlert()
+            alert.messageText = L("截图记录尚未保存")
+            alert.informativeText = L("部分截图未能保存到本机记录。仍然退出会丢失这些截图。")
+            alert.addButton(withTitle: L("取消"))
+            alert.addButton(withTitle: L("仍然退出"))
+            guard alert.runModal() == .alertSecondButtonReturn else { return .terminateCancel }
+            discardsFailedCaptures = true
+        } else { discardsFailedCaptures = false }
+        // Finish original-image writes before a normal quit, including quick captures.
+        Task {
+            await history.flush()
+            // A newly failed write already reports its error; keep the app and original alive.
+            sender.reply(toApplicationShouldTerminate: discardsFailedCaptures || !history.hasFailedWrites)
+        }
+        return .terminateLater
     }
 
     private func confirmDiscard() -> Bool {
         editorWindow?.makeFirstResponder(nil)
         guard session.hasUnsavedChanges else { return true }
+        // An unchanged capture already has an original in history; only its edits need saving.
+        if !session.hasEdits, let id = session.captureID,
+           let entry = history.entries.first(where: { $0.id == id }),
+           FileManager.default.fileExists(atPath: entry.fileURL.path) { return true }
         let alert = NSAlert()
         alert.messageText = L("保存当前图片？")
         alert.informativeText = L("当前图片尚未保存。继续会丢弃图片和编辑记录。")
@@ -254,26 +312,19 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     func startCapture(_ mode: CaptureMode) {
-        guard !capturePending, !capture.isCapturing, NSApp.modalWindow == nil else { return }
+        guard !capture.isCapturing, NSApp.modalWindow == nil else { return }
         captureLauncher.close()
+        captureFeedback.close()
         let previous = NSWorkspace.shared.frontmostApplication
         guard confirmDiscard() else { return }
         previousApplication = previous
-        captureWindows = [editorWindow, settingsWindow].compactMap { $0 }.filter(\.isVisible)
         captureKeyWindow = NSApp.keyWindow
-        capturePending = true
-        editorWindow?.orderOut(nil); settingsWindow?.orderOut(nil)
-        // Let WindowServer finish hiding our windows before freezing the desktop.
-        Task { [weak self] in
-            try? await Task.sleep(for: .milliseconds(140))
-            guard let self else { return }
-            self.capturePending = false
-            self.capture.start(mode, includesCursor: self.preferences.includesCursor)
-        }
+        // The capture filter excludes our windows. Hiding them here can dismiss a system
+        // popover before its pixels are captured, so leave window ordering to the overlay.
+        capture.start(mode, includesCursor: preferences.includesCursor)
     }
 
     private func restoreCaptureContext(restoresFocus: Bool = true) {
-        captureWindows.forEach { $0.orderFront(nil) }
         if !restoresFocus { clearCaptureContext(); return }
         if let previousApplication, previousApplication.processIdentifier != ProcessInfo.processInfo.processIdentifier {
             previousApplication.activate(options: [])
@@ -285,15 +336,87 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     private func clearCaptureContext() {
-        captureWindows.removeAll(); captureKeyWindow = nil; previousApplication = nil
+        captureKeyWindow = nil; previousApplication = nil
     }
 
     func showCaptureLauncher() {
-        guard !capturePending, !capture.isCapturing, NSApp.modalWindow == nil else { return }
+        guard !capture.isCapturing, NSApp.modalWindow == nil else { return }
         if captureLauncher.isVisible { captureLauncher.close(); return }
         let screen = NSScreen.screens.first { $0.frame.contains(NSEvent.mouseLocation) } ?? NSScreen.main
-        captureLauncher.show(on: screen, openEditor: { [weak self] in self?.showEditor() }) { [weak self] mode in
-            self?.startCapture(mode)
+        do {
+            try captureLauncher.show(on: screen, openSettings: { [weak self] in self?.showSettings() },
+                                     openEditor: { [weak self] in self?.showEditor() }) { [weak self] mode in
+                self?.startCapture(mode)
+            }
+        } catch { showError(error) }
+    }
+
+    private func editCapture(_ image: CGImage, captureID: UUID) {
+        // A delayed feedback action must preserve any document opened since the capture.
+        if session.image !== image && session.captureID != captureID {
+            guard confirmDiscard() else { return }
+            session.load(image)
+            session.captureID = captureID
+        }
+        showEditor()
+    }
+
+    func openCapture(_ entry: CaptureHistory.Entry) {
+        historyImageTask?.cancel()
+        if session.captureID == entry.id, session.image != nil {
+            session.historyShown = false
+            showEditor()
+            return
+        }
+        guard confirmDiscard() else { return }
+        historyImageTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                let image = try await self.history.image(for: entry)
+                try Task.checkCancellation()
+                // Returning to the current document abandons a pending history selection.
+                guard self.session.historyShown else { return }
+                self.session.load(image)
+                self.session.captureID = entry.id
+                self.showEditor()
+            } catch is CancellationError {
+            } catch { self.showError(error) }
+        }
+    }
+
+    func setHistoryShown(_ shown: Bool) {
+        historyImageTask?.cancel()
+        session.backgroundShown = false
+        session.historyShown = shown
+        if shown { refreshCaptureHistory() }
+    }
+
+    func refreshCaptureHistory() { loadCaptureHistory(from: preferences.saveFolder) }
+
+    private func loadCaptureHistory(from folder: URL) {
+        historyLoadTask?.cancel()
+        historyLoadTask = Task { [weak self] in
+            guard let self else { return }
+            do { try await self.history.load(savedDirectory: folder) }
+            catch is CancellationError {
+            } catch {
+                guard !Task.isCancelled else { return }
+                self.showError(error)
+            }
+        }
+    }
+
+    func copyCapture(_ entry: CaptureHistory.Entry) {
+        historyCopyTask?.cancel()
+        historyCopyTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                let image = try await self.history.image(for: entry)
+                try Task.checkCancellation()
+                try ImageExporter.copy(image)
+                self.session.notify(L("已复制"))
+            } catch is CancellationError {
+            } catch { self.showError(error) }
         }
     }
 
@@ -327,6 +450,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     func copyImage() {
+        historyCopyTask?.cancel()
         guard let image = session.image else { return }
         do {
             editorWindow?.makeFirstResponder(nil)

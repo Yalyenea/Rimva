@@ -25,6 +25,8 @@ enum EditorTool: String, CaseIterable, Identifiable {
 final class EditorSession: ObservableObject {
     private struct Snapshot: Equatable { var state: EditState; var style: BackgroundStyle }
     @Published private(set) var image: CGImage?
+    @Published var historyShown = false
+    var captureID: UUID?
     @Published var state = EditState() { didSet { updateHistory() } }
     @Published var style = BackgroundStyle() {
         didSet {
@@ -52,6 +54,7 @@ final class EditorSession: ObservableObject {
     private var toastTask: Task<Void, Never>?
     private var savedSnapshot: Snapshot?
     private var copiedSnapshot: Snapshot?
+    private var loadedSnapshot: Snapshot?
     private var savedBackgroundPath: String?
     private var copiedBackgroundPath: String?
     private var interaction: Snapshot?
@@ -75,12 +78,15 @@ final class EditorSession: ObservableObject {
         style.enabled && style.source == .image ? style.imagePath(for: Preferences.shared.renderAppearance) : nil
     }
     var hasUnsavedChanges: Bool { image != nil && (snapshot != savedSnapshot || renderedBackgroundPath != savedBackgroundPath) }
+    var hasEdits: Bool { image != nil && snapshot != loadedSnapshot }
     var isInteracting: Bool { interaction != nil }
 
     var selected: Annotation? { state.annotations.first { $0.id == selectedID } }
     var outputSize: CGSize { guard let image else { return .zero }; return ImageRenderer.outputSize(image: image, state: state, style: style) }
 
     func load(_ image: CGImage) {
+        historyShown = false
+        captureID = nil
         self.image = image
         style = Preferences.shared.defaultStyle
         state = EditState()
@@ -93,13 +99,17 @@ final class EditorSession: ObservableObject {
         toastTask?.cancel(); toast = nil
         interaction = nil
         past.removeAll(); future.removeAll(); updateHistory()
+        loadedSnapshot = snapshot
     }
 
     func releaseImage() {
+        historyShown = false
+        captureID = nil
         backgroundShown = false
         image = nil; state = EditState(); selectedID = nil; pendingCrop = nil
         savedURL = nil; savedSnapshot = nil; copiedSnapshot = nil; clipboardIsStale = false; interaction = nil
         savedBackgroundPath = nil; copiedBackgroundPath = nil
+        loadedSnapshot = nil
         toastTask?.cancel(); toast = nil
         past.removeAll(); future.removeAll(); updateHistory()
     }

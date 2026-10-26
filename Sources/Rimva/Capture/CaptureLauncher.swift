@@ -1,22 +1,28 @@
 import AppKit
+import Carbon
 import Combine
 import RimvaCore
 import SwiftUI
 
 @MainActor
-final class CaptureLauncher: NSObject, NSWindowDelegate {
+final class CaptureLauncher: NSObject {
     var isVisible: Bool { panel?.isVisible == true }
 
     private var panel: LauncherPanel?
     private var choose: ((CaptureMode) -> Void)?
     private var openEditor: (() -> Void)?
-    private var keyMonitor: Any?
+    private var openSettings: (() -> Void)?
+    private let keys = CaptureKeySession(signature: 0x52494D4C)
+    private var mouseMonitors: [Any] = []
     private var subscriptions: Set<AnyCancellable> = []
 
-    func show(on screen: NSScreen?, openEditor: @escaping () -> Void, choose: @escaping (CaptureMode) -> Void) {
+    func show(on screen: NSScreen?, openSettings: @escaping () -> Void, openEditor: @escaping () -> Void,
+              choose: @escaping (CaptureMode) -> Void) throws {
         close()
+        try keys.start([18, 19, 20, 21, 23, 22, 83, 84, 85, 86, 87, 88, 36, 76, 53]) { [weak self] in self?.handleShortcut($0) }
         self.choose = choose
         self.openEditor = openEditor
+        self.openSettings = openSettings
         let size = NSSize(width: 706, height: 104)
         let panel = LauncherPanel(contentRect: NSRect(origin: .zero, size: size),
                                   styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
@@ -31,9 +37,9 @@ final class CaptureLauncher: NSObject, NSWindowDelegate {
         panel.hasShadow = true
         panel.appearance = Preferences.shared.appearance.native
         panel.title = L("截图入口")
-        panel.delegate = self
         let content = CaptureLauncherView(choose: { [weak self] mode in self?.select(mode) },
-                                          openEditor: { [weak self] in self?.edit() })
+                                          openEditor: { [weak self] in self?.edit() },
+                                          openSettings: { [weak self] in self?.settings() })
         panel.contentView = NSHostingView(rootView: content.ignoresSafeArea())
         let target = screen ?? NSScreen.screens.first(where: { $0.frame.contains(NSEvent.mouseLocation) }) ?? NSScreen.main
         if let visibleFrame = target?.visibleFrame {
@@ -42,20 +48,27 @@ final class CaptureLauncher: NSObject, NSWindowDelegate {
             panel.center()
         }
         self.panel = panel
-        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            guard let self, self.panel?.isKeyWindow == true else { return event }
-            let modifiers = event.modifierFlags.intersection([.command, .control, .option, .shift])
-            guard modifiers.isEmpty else { return event }
-            switch event.keyCode {
-            case 53: self.close(); return nil
-            case 18, 83, 36, 76: self.select(.region); return nil
-            case 19, 84: self.select(.scrolling); return nil
-            case 20, 85: self.select(.window); return nil
-            case 21, 86: self.select(.fullScreen); return nil
-            case 23, 87: self.edit(); return nil
-            default: return event
+        let mouseEvents: NSEvent.EventTypeMask = [.leftMouseDown, .rightMouseDown, .otherMouseDown]
+        if let monitor = NSEvent.addLocalMonitorForEvents(matching: mouseEvents, handler: { [weak self] event in
+            if let self, event.window !== self.panel { self.close() }
+            return event
+        }) { mouseMonitors.append(monitor) }
+        if let monitor = NSEvent.addGlobalMonitorForEvents(matching: mouseEvents, handler: { [weak self] _ in
+            self?.close()
+        }) { mouseMonitors.append(monitor) }
+        let workspace = NSWorkspace.shared.notificationCenter
+        workspace.publisher(for: NSWorkspace.didActivateApplicationNotification)
+            .sink { [weak self] notification in
+                guard notification.userInfo?[NSWorkspace.applicationUserInfoKey] is NSRunningApplication else { return }
+                self?.close()
             }
-        }
+            .store(in: &subscriptions)
+        workspace.publisher(for: NSWorkspace.activeSpaceDidChangeNotification)
+            .sink { [weak self] _ in self?.close() }
+            .store(in: &subscriptions)
+        NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)
+            .sink { [weak self] _ in self?.close() }
+            .store(in: &subscriptions)
         NotificationCenter.default.publisher(for: .rimvaThemeChanged)
             .sink { [weak self] _ in self?.panel?.appearance = Preferences.shared.appearance.native }
             .store(in: &subscriptions)
@@ -65,31 +78,54 @@ final class CaptureLauncher: NSObject, NSWindowDelegate {
         NotificationCenter.default.publisher(for: NSApplication.didChangeScreenParametersNotification)
             .sink { [weak self] _ in self?.close() }
             .store(in: &subscriptions)
-        // A nonactivating panel accepts the choice without bringing editor windows forward.
+        // Even a nonactivating key panel steals keyboard focus and dismisses system popovers.
+        // Scoped hotkeys accept the choice while the original window keeps its focus.
         panel.orderFrontRegardless()
-        panel.makeKey()
     }
 
     func close() {
         choose = nil
         openEditor = nil
-        if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
-        keyMonitor = nil
+        openSettings = nil
+        keys.stop()
+        mouseMonitors.forEach { NSEvent.removeMonitor($0) }
+        mouseMonitors.removeAll()
         subscriptions.removeAll()
         let closingPanel = panel
         panel = nil
-        closingPanel?.delegate = nil
         closingPanel?.orderOut(nil)
         closingPanel?.contentView = nil
         closingPanel?.close()
     }
 
-    func windowDidResignKey(_ notification: Notification) { close() }
+    deinit {
+        mouseMonitors.forEach { NSEvent.removeMonitor($0) }
+    }
+
+    private func handleShortcut(_ key: UInt32) {
+        guard isVisible else { return }
+        switch key {
+        case 53: close()
+        case 18, 83, 36, 76: select(.region)
+        case 19, 84: select(.scrolling)
+        case 20, 85: select(.window)
+        case 21, 86: select(.fullScreen)
+        case 23, 87: edit()
+        case 22, 88: settings()
+        default: break
+        }
+    }
 
     private func edit() {
         guard let openEditor else { return }
         close()
         openEditor()
+    }
+
+    private func settings() {
+        guard let openSettings else { return }
+        close()
+        openSettings()
     }
 
     private func select(_ mode: CaptureMode) {
@@ -102,13 +138,14 @@ final class CaptureLauncher: NSObject, NSWindowDelegate {
 
 @MainActor
 private final class LauncherPanel: NSPanel {
-    override var canBecomeKey: Bool { true }
+    override var canBecomeKey: Bool { false }
     override var canBecomeMain: Bool { false }
 }
 
 private struct CaptureLauncherView: View {
     var choose: (CaptureMode) -> Void
     var openEditor: () -> Void
+    var openSettings: () -> Void
     @ObservedObject private var preferences = Preferences.shared
 
     var body: some View {
@@ -118,7 +155,38 @@ private struct CaptureLauncherView: View {
             option(L("长截屏"), icon: "arrow.down.to.line.compact", key: "2") { choose(.scrolling) }
             option(L("窗口截图"), icon: "macwindow", key: "3") { choose(.window) }
             option(L("全屏截图"), icon: "rectangle.dashed", key: "4") { choose(.fullScreen) }
-            option(L("打开编辑器"), icon: "square.and.pencil", key: "5", action: openEditor)
+            VStack(spacing: 6) {
+                Button(action: openEditor) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "square.and.pencil").font(.system(size: 16))
+                        Text(L("打开编辑器")).font(.system(size: 12, weight: .medium))
+                        Spacer(minLength: 0)
+                        shortcut("5")
+                    }
+                    .padding(.horizontal, 8)
+                    .frame(maxWidth: .infinity).frame(height: 48)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(LauncherOptionStyle())
+                .accessibilityLabel(L("打开编辑器"))
+                .accessibilityHint("5")
+                Button(action: openSettings) {
+                    HStack(spacing: 7) {
+                        Image(systemName: "gearshape").font(.system(size: 12))
+                        Text(L("设置")).font(.system(size: 11, weight: .medium))
+                        Spacer(minLength: 4)
+                        shortcut("6")
+                    }
+                    .padding(.horizontal, 12)
+                    .frame(maxWidth: .infinity).frame(height: 26)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(LauncherOptionStyle())
+                .help(L("设置…") + " (6)")
+                .accessibilityLabel(L("设置…"))
+                .accessibilityHint("6")
+            }
+            .frame(width: 130)
         }
         .padding(12)
         .foregroundStyle(Color(nsColor: palette.text))
@@ -128,6 +196,11 @@ private struct CaptureLauncherView: View {
                 .strokeBorder(Color(nsColor: palette.separator), lineWidth: 0.5)
         }
         .environment(\.locale, L10n.locale)
+    }
+
+    private func shortcut(_ key: String) -> some View {
+        Text(key).font(.system(size: 10, design: .monospaced))
+            .foregroundStyle(Color(nsColor: preferences.palette.secondary))
     }
 
     private func option(_ title: String, icon: String, key: String, action: @escaping () -> Void) -> some View {

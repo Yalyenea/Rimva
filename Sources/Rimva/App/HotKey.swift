@@ -6,6 +6,66 @@ import SwiftUI
 
 private let shortcutSignature: OSType = 0x52494D56
 
+/// Temporary keys are owned by one visible capture surface and released together.
+@MainActor
+final class CaptureKeySession {
+    private let signature: OSType
+    private var handler: EventHandlerRef?
+    private var references: [EventHotKeyRef] = []
+    private var action: ((UInt32) -> Void)?
+
+    init(signature: OSType) { self.signature = signature }
+
+    func start(_ keys: [UInt32], action: @escaping (UInt32) -> Void) throws {
+        stop()
+        self.action = action
+        do {
+            var type = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
+            let pointer = Unmanaged.passUnretained(self).toOpaque()
+            let status = InstallEventHandler(GetEventDispatcherTarget(), { _, event, data in
+                guard let event, let data else { return OSStatus(eventNotHandledErr) }
+                var id = EventHotKeyID()
+                let status = GetEventParameter(event, EventParamName(kEventParamDirectObject), EventParamType(typeEventHotKeyID),
+                                               nil, MemoryLayout<EventHotKeyID>.size, nil, &id)
+                guard status == noErr else { return OSStatus(eventNotHandledErr) }
+                let session = Unmanaged<CaptureKeySession>.fromOpaque(data).takeUnretainedValue()
+                return MainActor.assumeIsolated {
+                    guard id.signature == session.signature else { return OSStatus(eventNotHandledErr) }
+                    session.action?(id.id)
+                    return noErr
+                }
+            }, 1, &type, pointer, &handler)
+            guard status == noErr else { throw CaptureKeyFailure(status: status) }
+            for key in keys {
+                var reference: EventHotKeyRef?
+                let id = EventHotKeyID(signature: signature, id: key)
+                let status = RegisterEventHotKey(key, 0, id, GetEventDispatcherTarget(),
+                                                OptionBits(kEventHotKeyExclusive), &reference)
+                guard status == noErr, let reference else { throw CaptureKeyFailure(status: status) }
+                references.append(reference)
+            }
+        } catch { stop(); throw error }
+    }
+
+    func stop() {
+        action = nil
+        for reference in references { UnregisterEventHotKey(reference) }
+        references.removeAll()
+        if let handler { RemoveEventHandler(handler) }
+        handler = nil
+    }
+
+    deinit {
+        for reference in references { UnregisterEventHotKey(reference) }
+        if let handler { RemoveEventHandler(handler) }
+    }
+}
+
+private struct CaptureKeyFailure: LocalizedError {
+    var status: OSStatus
+    var errorDescription: String? { L("无法启用截图快捷键（错误 %d）。", status) }
+}
+
 struct KeyCombination: Codable, Equatable {
     var keyCode: UInt32
     var modifiers: UInt32

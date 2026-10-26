@@ -6,6 +6,42 @@ import XCTest
 @testable import Rimva
 
 final class UIPreviewTests: XCTestCase {
+    @MainActor func testCaptureHistoryPreviews() async throws {
+        guard let path = ProcessInfo.processInfo.environment["RIMVA_UI_PREVIEW_DIR"] else {
+            throw XCTSkip("Run with RIMVA_UI_PREVIEW_DIR to generate capture history previews.")
+        }
+        _ = NSApplication.shared
+        let output = URL(fileURLWithPath: path, isDirectory: true)
+        let history = CaptureHistory(directory: output.appendingPathComponent("captures", isDirectory: true))
+        let sample = try XCTUnwrap(SampleImage.make())
+        for index in 0..<6 {
+            let source = index.isMultiple(of: 2) ? sample
+                : try XCTUnwrap(sample.cropping(to: CGRect(x: 0, y: 0, width: sample.width / 2, height: sample.height)))
+            history.record(source)
+        }
+        await history.flush()
+        let controller = AppController(hotKey: HotKey(registersShortcuts: false), history: history)
+        controller.session.load(sample)
+        controller.session.historyShown = true
+        let preferences = Preferences.shared
+        let original = (preferences.theme, preferences.language, preferences.appearance)
+        defer { preferences.theme = original.0; preferences.language = original.1; preferences.appearance = original.2 }
+        for theme in AppTheme.allCases {
+            preferences.theme = theme
+            for (code, language) in [("en", AppLanguage.english), ("zh", .chinese)] {
+                preferences.language = language
+                for appearance in [AppAppearance.light, .dark] {
+                    preferences.appearance = appearance
+                    let view = EditorView(session: controller.session, controller: controller)
+                    try await snapshot(AnyView(view), size: CGSize(width: 1008, height: 650),
+                                       to: output.appendingPathComponent("history-\(theme.rawValue)-\(code)-\(appearance.rawValue).png"))
+                }
+            }
+        }
+        try await snapshot(AnyView(EditorView(session: controller.session, controller: controller)),
+                           size: CGSize(width: 800, height: 520), to: output.appendingPathComponent("history-compact.png"))
+    }
+
     @MainActor func testCaptureActionPreviews() throws {
         guard let path = ProcessInfo.processInfo.environment["RIMVA_UI_PREVIEW_DIR"] else {
             throw XCTSkip("Run with RIMVA_UI_PREVIEW_DIR to generate capture controls.")
@@ -24,6 +60,20 @@ final class UIPreviewTests: XCTestCase {
                 preferences.language = language
                 for appearance in [AppAppearance.light, .dark] {
                     preferences.appearance = appearance
+                    let feedback = CaptureFeedback()
+                    for copied in [true, false] {
+                        feedback.show(copied: copied, edit: {})
+                        let title = copied ? L("已复制") : L("已保存")
+                        let feedbackView = try XCTUnwrap(NSApp.windows.first { $0.title == title && $0.isVisible }?.contentView)
+                        let kind = copied ? "copied" : "saved"
+                        try saveView(feedbackView, to: output.appendingPathComponent("\(kind)-\(theme.rawValue)-\(code)-\(appearance.rawValue).png"))
+                        feedback.close()
+                    }
+                    let launcher = CaptureLauncher()
+                    try launcher.show(on: NSScreen.main, openSettings: {}, openEditor: {}) { _ in }
+                    let launcherView = try XCTUnwrap(NSApp.windows.first { $0.title == L("截图入口") && $0.isVisible }?.contentView)
+                    try saveView(launcherView, to: output.appendingPathComponent("launcher-\(theme.rawValue)-\(code)-\(appearance.rawValue).png"))
+                    launcher.close()
                     let bounds = NSRect(x: 0, y: 0, width: 900, height: 600)
                     let view = CaptureSelectionView(image: try XCTUnwrap(SampleImage.make()), size: bounds.size, windowRects: [bounds])
                     view.toolbarSafeBounds = NSRect(x: 0, y: 60, width: 900, height: 502)
@@ -82,9 +132,10 @@ final class UIPreviewTests: XCTestCase {
 
         let preferences = Preferences.shared
         let hotKey = HotKey(registersShortcuts: false)
-        let controller = AppController(hotKey: hotKey)
+        let history = CaptureHistory(directory: output.appendingPathComponent("editor-captures", isDirectory: true))
+        let controller = AppController(hotKey: hotKey, history: history)
         controller.session.load(sample)
-        let emptyController = AppController(hotKey: hotKey)
+        let emptyController = AppController(hotKey: hotKey, history: history)
         let requested = ProcessInfo.processInfo.environment["RIMVA_UI_PREVIEW_THEME"] ?? "rosePine"
         let themes: [AppTheme]
         if requested == "all" { themes = AppTheme.allCases }
