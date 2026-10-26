@@ -29,6 +29,7 @@
 "取消 Esc" = "Cancel Esc";
 "截图 ↩" = "Capture ↩";
 "截图选区。拖动选择，空格切换窗口，回车截图，Escape 取消。" = "Capture area. Drag to select, Space to switch modes, Return to capture, Escape to cancel.";
+"窗口截图。单击窗口截图，空格切换区域，Escape 取消。" = "Capture window. Click a window to capture, Space for area selection, Escape to cancel.";
 "点选窗口  ·  空格：区域选择" = "Click a window  ·  Space: select area";
 "拖动选择区域  ·  空格：窗口选择  ·  回车：截图" = "Drag to select  ·  Space: select window  ·  Return: capture";
 "无法生成 PNG 图片。" = "Couldn't create the PNG image.";

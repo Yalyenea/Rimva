@@ -8,10 +8,9 @@ final class CaptureSelectionView: NSView, NSTextFieldDelegate {
     var onConfirm: ((Bool) -> Void)?
     var onCancel: (() -> Void)?
     var toolbarSafeBounds: NSRect { didSet { needsLayout = true } }
-    var isWindowMode = false { didSet { needsDisplay = true; invalidateCursorRects() } }
+    var isWindowMode = false { didSet { refreshLabels(); refresh() } }
     var isScrollingMode = false { didSet { refreshLabels(); refresh() } }
     var isFullScreenMode = false { didSet { selection = isFullScreenMode ? bounds : nil; refresh() } }
-    private var windowSelectionLocked = false
     var selectedRect: NSRect? { selection }
     var canConfirm: Bool {
         guard let selection, let pixelRect else { return false }
@@ -130,7 +129,11 @@ final class CaptureSelectionView: NSView, NSTextFieldDelegate {
         heightField.toolTip = L("高度（像素）")
         ratioButton.setAccessibilityLabel(L("选区比例"))
         ratioButton.toolTip = L("选区比例")
-        setAccessibilityLabel(isScrollingMode ? L("长截屏选区。拖动选择后按回车开始，Escape 取消。") : L("截图选区。拖动选择，空格切换窗口，回车截图，Escape 取消。"))
+        if isWindowMode {
+            setAccessibilityLabel(L("窗口截图。单击窗口截图，空格切换区域，Escape 取消。"))
+        } else {
+            setAccessibilityLabel(isScrollingMode ? L("长截屏选区。拖动选择后按回车开始，Escape 取消。") : L("截图选区。拖动选择，空格切换窗口，回车截图，Escape 取消。"))
+        }
         needsLayout = true; needsDisplay = true
         toolbar.needsDisplay = true
     }
@@ -251,13 +254,12 @@ final class CaptureSelectionView: NSView, NSTextFieldDelegate {
 
     func clearSelection() {
         selection = nil
-        windowSelectionLocked = false
         drag = nil
         refresh()
     }
 
     func updateWindowSelection(at point: NSPoint) {
-        guard isWindowMode, !windowSelectionLocked else { return }
+        guard isWindowMode else { return }
         selection = windowRects.first(where: { $0.contains(point) })?.intersection(bounds)
         refresh()
     }
@@ -282,10 +284,9 @@ final class CaptureSelectionView: NSView, NSTextFieldDelegate {
         let point = clamped(convert(event.locationInWindow, from: nil))
         pointer = point
         if isWindowMode {
-            windowSelectionLocked = false
+            // Resolve the target at the click, even if no hover event arrived first.
             updateWindowSelection(at: point)
-            // Lock the clicked window so moving to the toolbar cannot change the capture target.
-            windowSelectionLocked = canConfirm
+            confirmSelection()
             return
         }
         startPoint = point
@@ -398,6 +399,8 @@ final class CaptureSelectionView: NSView, NSTextFieldDelegate {
     }
 
     private func refresh() {
+        toolbar.isHidden = isWindowMode
+        if isWindowMode { dismissPrecisionControls() }
         confirmButton.isEnabled = canConfirm
         editorButton.isEnabled = canConfirm
         needsLayout = true

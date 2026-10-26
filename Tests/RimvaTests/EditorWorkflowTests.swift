@@ -278,25 +278,36 @@ final class EditorWorkflowTests: XCTestCase {
         }
     }
 
-    @MainActor func testWindowSelectionWaitsForCaptureActionAndKeepsClickedTarget() throws {
+    @MainActor func testWindowSelectionCapturesClickedTargetImmediately() throws {
         let view = CaptureSelectionView(image: try image(), size: CGSize(width: 320, height: 240),
                                         windowRects: [CGRect(x: 20, y: 20, width: 100, height: 100),
                                                       CGRect(x: 150, y: 20, width: 100, height: 100)])
         view.isWindowMode = true
         var actions: [Bool] = []
         view.onConfirm = { actions.append($0) }
+        view.updateWindowSelection(at: CGPoint(x: 180, y: 40))
+        XCTAssertEqual(view.selectedRect, CGRect(x: 150, y: 20, width: 100, height: 100))
+        XCTAssertTrue(actions.isEmpty, "Hovering only previews the target")
+        let toolbar = try XCTUnwrap(view.subviews.first)
+        XCTAssertTrue(toolbar.isHidden)
         let click = try XCTUnwrap(NSEvent.mouseEvent(with: .leftMouseDown, location: CGPoint(x: 40, y: 40),
                                                     modifierFlags: [], timestamp: 0, windowNumber: 0, context: nil,
                                                     eventNumber: 0, clickCount: 1, pressure: 1))
         view.mouseDown(with: click)
-        XCTAssertTrue(actions.isEmpty)
-        let selected = view.selectedRect
-        view.updateWindowSelection(at: CGPoint(x: 180, y: 40))
-        XCTAssertEqual(view.selectedRect, selected)
-        let buttons = view.subviews.flatMap(\.subviews).compactMap { $0 as? NSButton }
-        try XCTUnwrap(buttons.first { $0.accessibilityLabel() == L("在编辑器中打开") }).performClick(nil)
-        try XCTUnwrap(buttons.first { $0.title == L("截图") }).performClick(nil)
-        XCTAssertEqual(actions, [true, false])
+        XCTAssertEqual(actions, [false], "One click captures without opening the editor explicitly")
+        XCTAssertEqual(view.selectedRect, CGRect(x: 20, y: 20, width: 100, height: 100))
+        XCTAssertEqual(view.selectedImage()?.width, 200)
+        XCTAssertEqual(view.selectedImage()?.height, 200)
+
+        let emptyClick = try XCTUnwrap(NSEvent.mouseEvent(with: .leftMouseDown, location: CGPoint(x: 280, y: 200),
+                                                         modifierFlags: [], timestamp: 0, windowNumber: 0, context: nil,
+                                                         eventNumber: 0, clickCount: 1, pressure: 1))
+        view.mouseDown(with: emptyClick)
+        XCTAssertEqual(actions, [false], "Clicking outside a window cannot capture the previous hover target")
+        XCTAssertNil(view.selectedRect)
+
+        view.isWindowMode = false
+        XCTAssertFalse(toolbar.isHidden, "Area selection keeps its confirmation controls")
     }
 
     @MainActor func testCapturePanelEscapeCancelsWithSelectionButtonAndDimensionFocus() throws {
