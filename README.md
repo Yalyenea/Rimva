@@ -1,112 +1,153 @@
 # Rimva
 
-轻量的原生 macOS 截图工具，支持截图、添加背景、标注、复制和保存。
+English | [简体中文](README.zh-CN.md)
 
-## 功能
+A lightweight native macOS app for screenshots, backgrounds, annotations, copying, and saving.
 
-- 区域、窗口、全屏和滚动长截屏。
-- 箭头、矩形、文字、序号、实色遮挡、裁剪及撤销重做。
-- 12 款 Rosé Pine 背景预设（六组配色，各含渐变与抽象版本）、自定义图片、图片文件夹与 macOS 壁纸。
-- 留白、圆角、阴影，以及日间和夜间背景；关闭背景后仍可保留透明圆角。
-- 编辑画布支持缩放、滚动和平移，适合长截图标注。
-- 中英双语、跟随系统的语言与外观、Rosé Pine 与标准主题。
-- 可配置的全局快捷键、截图后自动复制和自动保存、PNG 导出。
-- 登录后静默启动，可隐藏菜单栏图标。
+## Install
 
-编辑器的背景按钮打开浮动面板。面板与设置窗口共用背景样式，调整后立即同步；留白数值直接决定图片边距。
+Requires macOS 14 or later. Supports Apple silicon and Intel Macs.
 
-默认按 `⌃⌥S` 打开截图入口，再按 `1` 区域截图、`2` 长截屏、`3` 窗口截图、`4` 全屏截图、`5` 打开编辑器或 `6` 打开设置。入口保持置顶，也可直接点击选项。右侧的编辑器和设置按钮上下排列，与其它卡片同宽。
+1. Download the universal ZIP from [Releases](https://github.com/Yalyenea/Rimva/releases) and extract it.
+2. Drag `Rimva.app` to Applications.
+3. Release builds are not notarized by Apple. If macOS blocks the app, run this in Terminal:
 
-截图过程中再次按截图快捷键可取消当前截图。选择区域或窗口时，切换到其他应用会自动取消选区，避免后台残留的截图阻挡后续快捷键。
+   ```sh
+   xattr -dr com.apple.quarantine /Applications/Rimva.app
+   ```
 
-窗口截图会实时高亮鼠标下的窗口，包括系统菜单栏弹窗；单击或按回车截图，保留窗口原生圆角、透明边缘和阴影。截图入口与窗口选区保持原窗口焦点，系统弹窗可以继续显示。按空格可在区域与窗口模式间切换。
+4. Open Rimva and allow screen recording in System Settings → Privacy & Security → Screen Recording. You may need to grant access again after an update.
 
-区域与全屏截图提供确认操作条：点“截图”完成自动复制、保存；点“编辑”直接进入编辑器。`Esc` 取消，回车截图。操作条避开刘海、菜单栏和 Dock，空间不足时放在选区底部内侧。
+## Features
 
-区域截图的尺寸、比例和操作按钮排列在同一行，按钮顺序为“编辑 → 取消 → 截图”。可直接输入宽高（像素），或选择自由、1:1、4:3、16:9 比例。输入尺寸或展开比例面板时，按一次 `Esc` 也会直接取消截图。
+- Region, window, full-screen, and scrolling capture.
+- Arrows, rectangles, text, numbered steps, solid redactions, cropping, undo, and redo.
+- 12 Rosé Pine background presets: six color palettes, each with gradient and abstract variants. Custom images, image folders, and macOS wallpapers are also supported.
+- Padding, separate screenshot and background corner radii, screenshot opacity, shadows, and light and dark backgrounds. Screenshot corners can remain transparent with the background disabled.
+- Canvas zooming, scrolling, and panning for editing long screenshots.
+- English and Simplified Chinese, system language and appearance, and Rosé Pine and Standard themes.
+- Configurable global shortcuts, automatic copying and saving, and PNG export.
+- Quiet launch at login and an optional menu bar icon.
 
-“截图后打开编辑器”默认关闭。自动复制或保存成功后返回原应用，显示带有“编辑”按钮的完成提示。提示停留 4 秒，悬停时保留；点击“编辑”继续处理对应截图。提示消失后，按 `⌃⌥S` → `5` 可在编辑器为空时找回最近原图，已有编辑内容会保留。没有启用自动输出，或输出失败时，会打开编辑器保留图片。
+The editor's background button opens a floating panel. It shares styles with Settings, so changes stay in sync. Padding sets the image margins directly.
 
-编辑器右上角的叠图图标打开截图记录。记录直接读取设置中保存目录第一层的 PNG、JPG、JPEG，并保留新截图的本机原图；自动保存的同一张截图只显示一条。点缩略图在当前窗口编辑，点卡片上的复制按钮复制原图。打开记录、切换保存目录或点击刷新时会重新读取文件；切换图片前会提示保存尚未保存的编辑。
+The padding slider marks 0, 32, 64, 96, 128, and 160 px, while dragging accepts every integer value. In the editor, `⇧↑` / `⇧↓` moves between padding marks; `⇧+` / `⇧−` adjusts screenshot corners by 1 px.
 
-“登录后静默启动”开启后，登录时仅在后台运行。隐藏菜单栏图标后，按 `⌃⌥S` → `6` 可直接进入设置。
+## Capture
 
-编辑器中，悬停工具图标可查看工具名和快捷键。输入文字时不会触发工具快捷键。
+Press `⌃⌥S` to open the capture launcher, then choose a mode:
 
-| 快捷键 | 工具 | 快捷键 | 工具 |
+| Key | Action |
+| --- | --- |
+| `1` | Region capture |
+| `2` | Scrolling capture |
+| `3` | Window capture |
+| `4` | Full-screen capture |
+| `5` | Open editor |
+| `6` | Open settings |
+
+You can also click the launcher controls. The launcher stays above other windows; the editor and settings buttons are stacked at the right.
+
+Press the capture shortcut again to cancel an active capture. Switching to another app cancels region or window selection.
+
+Window capture highlights the window under the pointer, including system menu bar popovers. Click or press Return to capture its native corners, transparency, and shadow. The launcher and window selector preserve the current window's focus so system popovers can stay open. Press Space to switch between region and window modes.
+
+Region and full-screen capture show a confirmation bar. Choose Capture to apply automatic output actions, or Edit to open the editor. Escape cancels; Return captures. The bar avoids the notch, menu bar, and Dock, moving inside the selection when needed.
+
+Region capture keeps dimensions, aspect ratio, and action buttons on one row, in the order Edit → Cancel → Capture. Enter a width and height in pixels, or choose Free, 1:1, 4:3, or 16:9. Escape cancels even when a dimension field or ratio panel has focus.
+
+Open Editor After Capture is off by default. After copying or saving, Rimva returns to the previous app and shows a confirmation with an Edit button for four seconds. Hover to keep it visible. Choose Edit to continue working on that capture.
+
+After the confirmation disappears, `⌃⌥S` → `5` restores the latest original if the editor is empty. Existing edits are preserved. If automatic output is disabled or fails, Rimva opens the editor to retain the image.
+
+For scrolling capture, select the scrolling content, excluding fixed sidebars and scrollbars. Scroll down in sections; Rimva stitches when scrolling settles. Choose Done to apply automatic output actions, or Open in Editor to continue editing. If matching is unreliable, you can roll back, select a new region, or keep the portion already stitched.
+
+The first capture requires screen recording access in System Settings.
+
+## Edit and save
+
+Hover over a tool to see its name and shortcut. Typing in a text field does not trigger tool shortcuts.
+
+| Shortcut | Tool | Shortcut | Tool |
 | --- | --- | --- | --- |
-| `V` | 选择 | `A` | 箭头 |
-| `R` | 矩形 | `T` | 文字 |
-| `N` | 序号 | `M` | 遮挡 |
-| `C` | 裁剪 | `B` | 背景面板 |
+| `V` | Select | `A` | Arrow |
+| `R` | Rectangle | `T` | Text |
+| `N` | Number | `M` | Redact |
+| `C` | Crop | `B` | Background panel |
 
-复制成图后可继续编辑；更改后按 `⌘↵` 重新复制。按 `⌘S` 保存、`⇧⌘S` 另存为。关闭或替换未保存的图片时会提示保存。
+Copying keeps the editor open. After editing, press `⌘↵` to copy the updated image. Use `⌘S` to save or `⇧⌘S` to save as. Closing or replacing an unsaved image prompts you to save.
 
-长截屏：框选滚动正文，避开固定侧栏和滚动条。分段向下滚动，停稳时自动拼接，点“完成”执行自动输出，或点“在编辑器中打开”继续编辑。
+The stacked-image icon at the top right opens capture history. It reads PNG, JPG, and JPEG files from the top level of the configured save folder and keeps local originals of new captures. An automatically saved capture appears once. Select a thumbnail to edit it in the current window, or use its Copy button to copy the original.
 
-匹配不可靠时会提示回滚或重新框选，也可保留已拼部分。
+Opening history, changing the save folder, or selecting Refresh reloads the files. Switching images prompts you to save unsaved edits.
 
-首次截图需要在系统设置中允许 Rimva 录制屏幕。
+Quiet Launch at Login runs Rimva in the background. If the menu bar icon is hidden, press `⌃⌥S` → `6` to open Settings.
 
-## 本地开发
+## Development
 
-需要 macOS 14 或更新版本、Xcode 的 Swift 工具链，以及 [just](https://github.com/casey/just)。项目使用 Swift Package Manager，无第三方依赖。
+Requires macOS 14 or later, Xcode 26 or later, and [just](https://github.com/casey/just). Rimva uses Swift Package Manager with no third-party dependencies. Its Icon Composer assets require Xcode 26 or later.
 
-### 配置固定签名
+### Configure a stable signing identity
 
-先查看本机已有的代码签名身份：
+List available code signing identities:
 
 ```sh
 just signing-identities
 ```
 
-选择长期使用的证书，将其 SHA-1 或完整名称写入项目根目录的 `.codesign-identity`（单行，本机配置，已被 Git 忽略）。也可通过环境变量指定，环境变量优先：
+Write a long-term certificate's SHA-1 or full name to `.codesign-identity` in the project root. This local, single-line file is ignored by Git. An environment variable takes precedence:
 
 ```sh
-export RIMVA_CODESIGN_IDENTITY='<证书 SHA-1 或完整名称>'
+export RIMVA_CODESIGN_IDENTITY='<certificate SHA-1 or full name>'
 ```
 
-构建需要钥匙串中对应的证书与私钥。缺少有效身份时会停止，不会自动创建证书或使用临时签名。不要提交个人证书信息。
+The certificate and its private key must be in the keychain. A missing identity stops the build. Local builds require a stable certificate; keep personal certificate details out of commits.
 
-### 构建与测试
+### Build and test
 
 ```sh
-just run          # 构建 Debug 应用并启动
-just test         # 运行 Release 配置的核心测试
-just build        # 构建 Release 应用
-just build-debug  # 构建 Debug 应用
-just verify       # 检查构建产物的签名
-just preview all  # 生成两套主题、中英文与明暗外观的界面预览
+just run          # Build and launch the Debug app
+just test         # Run tests in Release configuration
+just build        # Build the Release app
+just build-debug  # Build the Debug app
+just verify       # Verify the app signature
+just preview all  # Render both themes, languages, and appearances
 ```
 
-界面预览保存在 `.tmp/ui-preview/`；`just preview-live` 可打开独立的样图窗口。
+UI previews are saved to `.tmp/ui-preview/`. Use `just preview-live` to open a separate sample window.
 
-构建产物为 `.tmp/Rimva.app`，Bundle ID 固定为 `com.yfff.Rimva`。`just run` 使用签名后的应用包，运行前需退出已有的 Rimva 实例。直接运行 `zsh scripts/build.sh` 时，默认仍为 Debug 配置。
+The app bundle is `.tmp/Rimva.app`, with the fixed bundle identifier `com.yfff.Rimva`. Quit any running instance before `just run`. The command launches the signed app bundle. Running `zsh scripts/build.sh` directly defaults to Debug.
 
-长截屏和性能验证使用 `just build` 或 `just install` 生成的 Release 版本。
+Use Release builds from `just build` or `just install` for scrolling capture and performance checks.
 
-### 安装与更新
+### Install and update a local build
 
-日常使用固定安装路径 `/Applications/Rimva.app`：
+Use `/Applications/Rimva.app` for daily use:
 
 ```sh
-just install  # 构建 Release 应用并安装，需先退出 Rimva
-just launch   # 启动安装版
+just install  # Build and install Release; quit Rimva first
+just launch   # Launch the installed app
 ```
 
-安装脚本检查签名，并拒绝覆盖正在运行的应用。默认要求新旧版本的签名身份一致。首次从旧版临时签名迁移到固定证书时，显式允许这一次身份变化：
+The installer verifies signatures and rejects updates while Rimva is running. It requires the old and new signing identities to match. When intentionally migrating from an older ad hoc signature to a stable certificate, allow that identity change once:
 
 ```sh
 RIMVA_ALLOW_IDENTITY_CHANGE=1 just install
 just launch
 ```
 
-迁移后需在系统设置中重新授予一次屏幕录制权限。此后保持同一证书、Bundle ID 和安装路径，正常更新应保留授权；macOS 主动撤销权限或要求重新确认时，按系统提示处理。
+After migration, grant screen recording access again in System Settings. Keeping the same certificate, bundle identifier, and install path should preserve access during normal updates. Follow any macOS request to confirm access again.
 
-## 代码结构
+### GitHub releases
 
-- `Sources/Rimva/`：应用入口、截图流程、编辑器、设置与导出。
-- `Sources/RimvaCore/`：图片合成、滚动拼接、背景模型与本地化资源。
-- `Tests/RimvaCoreTests/`：合成、拼接、背景和本地化测试。
-- `Tests/RimvaTests/`：编辑状态、工具快捷键、截图选区与导出测试。
-- `PLAN.md`：早期产品规划。
+GitHub Actions runs tests, builds a universal macOS app, and verifies its signature and both architectures. Pushing a tag that matches the version in `Sources/Info.plist`, such as `v0.1.0`, creates a release with the ZIP and `SHA256SUMS`. Release builds use ad hoc signing and are not notarized by Apple.
+
+Run the Release workflow manually in Actions to produce build artifacts without publishing a release.
+
+## Project layout
+
+- `Sources/Rimva/`: application, capture flow, editor, settings, and export.
+- `Sources/RimvaCore/`: image rendering, scrolling stitcher, background models, and localization resources.
+- `Tests/RimvaCoreTests/`: rendering, stitching, background, and localization tests.
+- `Tests/RimvaTests/`: editor state, tool shortcuts, capture selection, and export tests.
+- `PLAN.md`: early product planning.

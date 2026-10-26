@@ -2,26 +2,42 @@
 set -euo pipefail
 cd "${0:A:h:h}"
 configuration="${1:-debug}"
+architecture="${2:-native}"
 app_path="$PWD/.tmp/Rimva.app"
-signing_identity="${RIMVA_CODESIGN_IDENTITY:-}"
-if [[ -z "$signing_identity" && -f .codesign-identity ]]; then
-    signing_identity="$(< .codesign-identity)"
-fi
-if [[ -z "$signing_identity" || "$signing_identity" == "-" ]]; then
-    print -u2 '请配置固定签名证书：设置 RIMVA_CODESIGN_IDENTITY，或将证书 SHA-1 写入 .codesign-identity。'
-    exit 1
-fi
-if ! security find-identity -v -p codesigning | /usr/bin/grep -Fq -- "$signing_identity"; then
-    print -u2 '配置的签名证书不可用。请用 just signing-identities 检查本机证书。'
-    exit 1
-fi
+build_arguments=(--configuration "$configuration" --scratch-path .tmp/swift-build)
+case "$architecture" in
+    native) ;;
+    universal) build_arguments+=(--arch arm64 --arch x86_64) ;;
+    *) print -u2 '构建架构必须是 native 或 universal。'; exit 1 ;;
+esac
+case "${RIMVA_SIGNING_MODE:-certificate}" in
+    certificate)
+        signing_identity="${RIMVA_CODESIGN_IDENTITY:-}"
+        if [[ -z "$signing_identity" && -f .codesign-identity ]]; then
+            signing_identity="$(< .codesign-identity)"
+        fi
+        if [[ -z "$signing_identity" || "$signing_identity" == "-" ]]; then
+            print -u2 '请配置固定签名证书：设置 RIMVA_CODESIGN_IDENTITY，或将证书 SHA-1 写入 .codesign-identity。'
+            exit 1
+        fi
+        if ! security find-identity -v -p codesigning | /usr/bin/grep -Fq -- "$signing_identity"; then
+            print -u2 '配置的签名证书不可用。请用 just signing-identities 检查本机证书。'
+            exit 1
+        fi
+        ;;
+    adhoc)
+        # Public builds without a Developer ID must explicitly opt into ad hoc signing.
+        signing_identity="-"
+        ;;
+    *) print -u2 '签名模式必须是 certificate 或 adhoc。'; exit 1 ;;
+esac
 # Replacing a running development bundle would invalidate its live signature.
 if /bin/ps -axo comm= | /usr/bin/grep -Fxq "$app_path/Contents/MacOS/Rimva"; then
     print -u2 '请先退出开发版 Rimva，再重新构建。'
     exit 1
 fi
-swift build --configuration "$configuration" --scratch-path .tmp/swift-build
-binary_dir="$(swift build --configuration "$configuration" --scratch-path .tmp/swift-build --show-bin-path)"
+swift build "${build_arguments[@]}"
+binary_dir="$(swift build "${build_arguments[@]}" --show-bin-path)"
 mkdir -p "$app_path/Contents/MacOS"
 mkdir -p "$app_path/Contents/Resources"
 cp "$binary_dir/Rimva" "$app_path/Contents/MacOS/Rimva"

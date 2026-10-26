@@ -1,0 +1,105 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Test and build
+    runs-on: macos-15-intel
+    timeout-minutes: 30
+    env:
+      # Icon Composer assets require Xcode 26 or newer.
+      DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
+    steps:
+      - name: Check out source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Validate version
+        id: version
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          version=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' Sources/Info.plist)
+          if [[ "$REF_TYPE" == tag && "$REF_NAME" != "v$version" ]]; then
+            echo "Tag $REF_NAME does not match app version $version." >&2
+            exit 1
+          fi
+          echo "value=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Install just
+        run: brew install just
+
+      - name: Run tests
+        run: just test
+
+      - name: Build universal app
+        env:
+          RIMVA_SIGNING_MODE: adhoc
+        run: zsh scripts/build.sh release universal
+
+      - name: Verify and package
+        env:
+          VERSION: ${{ steps.version.outputs.value }}
+        run: |
+          codesign --verify --deep --strict .tmp/Rimva.app
+          lipo -verify_arch arm64 x86_64 .tmp/Rimva.app/Contents/MacOS/Rimva
+          mkdir -p .tmp/release
+          ditto -c -k --sequesterRsrc --keepParent .tmp/Rimva.app ".tmp/release/Rimva-$VERSION-universal.zip"
+          cd .tmp/release
+          shasum -a 256 "Rimva-$VERSION-universal.zip" > SHA256SUMS
+
+      - name: Upload build
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: Rimva-${{ steps.version.outputs.value }}-universal
+          path: |
+            .tmp/release/*.zip
+            .tmp/release/SHA256SUMS
+          if-no-files-found: error
+          compression-level: 0
+          include-hidden-files: true
+
+  publish:
+    name: Publish release
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - name: Check out release notes
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Download build
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+        run: gh run download "$RUN_ID" --dir .tmp/release
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          gh release create "$TAG" .tmp/release/*/*.zip .tmp/release/*/SHA256SUMS \
+            --verify-tag --title "Rimva $TAG" --notes-file .github/release-notes.md
