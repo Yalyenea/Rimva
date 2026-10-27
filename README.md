@@ -56,7 +56,7 @@ Region and full-screen capture show a confirmation bar. Choose Capture to apply 
 
 Region capture keeps dimensions, aspect ratio, and action buttons on one row, in the order Edit → Cancel → Capture. Enter a width and height in pixels, or choose Free, 1:1, 4:3, or 16:9. Escape cancels even when a dimension field or ratio panel has focus.
 
-Open Editor After Capture is off by default. After copying or saving, Rimva returns to the previous app and shows a confirmation with an Edit button for four seconds. Hover to keep it visible. Choose Edit to continue working on that capture.
+Open Editor After Capture is off by default. After copying or saving, Rimva returns to the previous app and shows a compact confirmation with an Edit button styled to match the capture controls. It stays visible for four seconds. Hover to keep it visible. Choose Edit to continue working on that capture.
 
 After the confirmation disappears, `⌃⌥S` → `5` restores the latest original if the editor is empty. Existing edits are preserved. If automatic output is disabled or fails, Rimva opens the editor to retain the image.
 

@@ -10,8 +10,7 @@ final class CaptureFeedback {
     func show(copied: Bool, edit: @escaping () -> Void) {
         close()
         guard let screen = NSScreen.screens.first(where: { $0.frame.contains(NSEvent.mouseLocation) }) ?? NSScreen.main else { return }
-        let size = NSSize(width: 204, height: 40)
-        let panel = NSPanel(contentRect: NSRect(origin: .zero, size: size),
+        let panel = NSPanel(contentRect: .zero,
                             styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         panel.isReleasedWhenClosed = false
         let message = copied ? L("已复制") : L("已保存")
@@ -24,7 +23,7 @@ final class CaptureFeedback {
         panel.backgroundColor = .clear
         panel.hasShadow = false
         panel.appearance = Preferences.shared.appearance.native
-        panel.contentView = FeedbackHostingView(rootView: CaptureFeedbackView(message: message, edit: { [weak self, weak panel] in
+        let content = FeedbackHostingView(rootView: CaptureFeedbackView(message: message, edit: { [weak self, weak panel] in
             guard let self, let panel, self.panel === panel else { return }
             self.close()
             edit()
@@ -33,6 +32,10 @@ final class CaptureFeedback {
             self.dismissTask?.cancel()
             if !hovering { self.scheduleDismissal() }
         }))
+        // Size to the localized controls instead of stretching a fixed-width toast.
+        let size = content.fittingSize
+        panel.contentView = content
+        panel.setContentSize(size)
         panel.setFrameOrigin(NSPoint(x: screen.visibleFrame.midX - size.width / 2,
                                      y: screen.visibleFrame.minY + 48))
         self.panel = panel
@@ -79,25 +82,33 @@ private struct CaptureFeedbackView: View {
     @ObservedObject private var preferences = Preferences.shared
 
     var body: some View {
-        HStack(spacing: 7) {
-            Image(systemName: "checkmark").foregroundStyle(Color(nsColor: preferences.palette.accent))
-            Text(message)
-            Spacer(minLength: 12)
-            Button(action: edit) {
-                Text(L("编辑"))
-                    .padding(.horizontal, 10).padding(.vertical, 5)
-                    .background(Color(nsColor: preferences.palette.elevated), in: RoundedRectangle(cornerRadius: 5))
-                    .contentShape(Rectangle())
+        HStack(spacing: 8) {
+            HStack(spacing: 6) {
+                Image(systemName: "checkmark")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(Color(nsColor: preferences.palette.accent))
+                    .frame(width: 12)
+                    .accessibilityHidden(true)
+                Text(message)
             }
-            .buttonStyle(.plain)
+            Button(action: edit) {
+                HStack(spacing: 5) {
+                    Image(systemName: "pencil").font(.system(size: 11, weight: .medium))
+                    Text(L("编辑"))
+                }
+            }
+            .buttonStyle(ThemedActionStyle())
             .help(L("在编辑器中打开"))
+            .accessibilityLabel(L("在编辑器中打开"))
         }
-        .font(.system(size: 12, weight: .medium))
+        .font(.system(size: 12))
         .foregroundStyle(Color(nsColor: preferences.palette.text))
-        .padding(.horizontal, 12)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color(nsColor: preferences.palette.background), in: RoundedRectangle(cornerRadius: 8))
-        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color(nsColor: preferences.palette.separator), lineWidth: 0.5))
+        .padding(.horizontal, 8)
+        .frame(height: EditorToolbarMetrics.height)
+        .fixedSize(horizontal: true, vertical: false)
+        .background(Color(nsColor: preferences.palette.surface), in: RoundedRectangle(cornerRadius: 6))
+        .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Color(nsColor: preferences.palette.separator), lineWidth: 1))
+        .focusEffectDisabled()
         .onHover(perform: hover)
     }
 }
